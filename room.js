@@ -1,6 +1,7 @@
-// Room state and rules, independent of the network layer so it can be unit-tested.
-const crypto = require("crypto");
-const { deal, isMafia, MIN_PLAYERS } = require("./public/roles.js");
+// Room state and rules. Runs in the host's browser (window.MafiaRoom) and in Node for tests.
+(function (root) {
+const { deal, isMafia, MIN_PLAYERS } = typeof module !== "undefined" && module.exports ? require("./roles.js") : root.MafiaRoles;
+const randomBytes = n => globalThis.crypto.getRandomValues(new Uint8Array(n));
 
 const CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // no 0/O, 1/I
 const CODE_LEN = 5;
@@ -13,11 +14,11 @@ class GameError extends Error {
   constructor(code, message) { super(message); this.code = code; }
 }
 
-const token = () => crypto.randomBytes(18).toString("base64url");
+const token = () => Array.from(randomBytes(18), b => b.toString(16).padStart(2, "0")).join("");
 
 function randomCode() {
   let s = "";
-  const bytes = crypto.randomBytes(CODE_LEN);
+  const bytes = randomBytes(CODE_LEN);
   for (let i = 0; i < CODE_LEN; i++) s += CODE_ALPHABET[bytes[i] % CODE_ALPHABET.length];
   return s;
 }
@@ -165,4 +166,16 @@ class RoomStore {
   }
 }
 
-module.exports = { RoomStore, GameError, cleanName, MAX_PLAYERS, MAX_NAME, ROOM_TTL_MS };
+// Restore a room saved by the host (e.g. after a page reload).
+RoomStore.prototype.restore = function (saved) {
+  if (!saved || typeof saved.code !== "string" || !Array.isArray(saved.players)) return null;
+  saved.players.forEach(p => { p.connected = false; });
+  saved.touched = this.now();
+  this.rooms.set(saved.code, saved);
+  return saved;
+};
+
+const api = { RoomStore, GameError, cleanName, MAX_PLAYERS, MAX_NAME, ROOM_TTL_MS, CODE_LEN };
+if (typeof module !== "undefined" && module.exports) module.exports = api;
+else root.MafiaRoom = api;
+})(typeof window !== "undefined" ? window : globalThis);

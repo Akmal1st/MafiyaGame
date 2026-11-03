@@ -1,7 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert");
-const { RoomStore, cleanName, ROOM_TTL_MS } = require("../rooms.js");
-const { composition } = require("../public/roles.js");
+const { RoomStore, cleanName, ROOM_TTL_MS } = require("../room.js");
+const { composition } = require("../roles.js");
 
 function roomWith(store, n) {
   const room = store.create();
@@ -109,4 +109,16 @@ test("idle rooms are swept", () => {
   t = ROOM_TTL_MS + 1;
   s.sweep();
   assert.throws(() => s.get(room.code), { code: "no_room" });
+});
+
+test("restore brings back a saved room with players marked offline", () => {
+  const s = new RoomStore();
+  const room = roomWith(s, 5);
+  s.start(room);
+  const saved = JSON.parse(JSON.stringify(room));
+  const s2 = new RoomStore();
+  const r2 = s2.restore(saved);
+  assert.strictEqual(s2.get(room.code), r2);
+  assert.ok(r2.players.every(p => !p.connected));
+  assert.deepStrictEqual(s2.secretFor(r2, 1), s.secretFor(room, 1));
 });

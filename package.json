@@ -1,10 +1,9 @@
 {
   "name": "mafiyagame",
   "version": "1.0.0",
-  "description": "Мафия: онлайн-раздача ролей по ссылке-приглашению",
-  "main": "server.js",
+  "description": "Мафия: онлайн-игра по ссылке-приглашению (GitHub Pages, без сервера)",
   "scripts": {
-    "start": "node server.js",
+    "start": "npx --yes serve@14.2.4 -l 3000 .",
     "test": "node --test test/*.test.js"
   },
   "repository": {
@@ -16,14 +15,6 @@
     "url": "https://github.com/Akmal1st/MafiyaGame/issues"
   },
   "homepage": "https://github.com/Akmal1st/MafiyaGame#readme",
-  "dependencies": {
-    "express": "^4.22.3",
-    "qrcode": "^1.5.4",
-    "socket.io": "^4.8.4"
-  },
-  "devDependencies": {
-    "socket.io-client": "^4.8.4"
-  },
   "engines": {
     "node": ">=18"
   },

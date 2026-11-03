@@ -2,43 +2,49 @@
 
 Har bir o'yinchi o'z telefonidan kiradigan Mafia o'yini. Host (boshlovchi) xona yaratadi, taklif linkini yoki QR-kodni ulashadi. O'yinchilar linkni ochib, ismini kiritadi. Hamma yig'ilgach host o'yinni boshlaydi va har kim faqat o'z rolini ko'radi.
 
-Eski bitta telefonli versiya `/offline.html` manzilida saqlangan.
+Server kerak emas: sayt GitHub Pages'da ishlaydi. Eski bitta telefonli versiya `offline.html` da saqlangan.
 
-## Ishga tushirish
+## GitHub Pages'ga joylash
 
-```bash
-npm install
-npm start        # http://localhost:3000
-npm test
-```
+1. Repo → **Settings → Pages**.
+2. **Source**: *Deploy from a branch*. Branch: kod turgan branch, papka: `/ (root)`. **Save**.
+3. Bir-ikki daqiqadan keyin sayt `https://<login>.github.io/MafiyaGame/` manzilida ochiladi.
 
-`PORT` muhit o'zgaruvchisi portni o'zgartiradi.
+Bepul GitHub hisobida Pages faqat **public** repolarda ishlaydi.
 
 ## Qanday ishlaydi
 
-1. Host bosh sahifada **«Создать игру»** ni bosadi. 5 belgili xona kodi, link (`/?room=KOD`) va QR-kod chiqadi.
-2. O'yinchilar linkni ochadi yoki kodni qo'lda kiritadi, ismini yozadi va kutish xonasiga tushadi. Host ro'yxatni jonli ko'radi va kerak bo'lsa o'yinchini chiqarib yuboradi.
-3. Kamida 5 kishi bo'lganda host o'yinni boshlaydi. Server rollarni tarqatadi va har bir telefonga faqat uning rolini yuboradi:
+1. Host **«Создать игру»** ni bosadi. 5 belgili xona kodi, link (`?room=KOD`) va QR-kod chiqadi.
+2. O'yinchilar linkni ochadi yoki kodni qo'lda kiritadi, ismini yozadi va kutish xonasiga tushadi. Host ro'yxatni jonli ko'radi va kerak bo'lsa o'yinchini chiqaradi.
+3. Kamida 5 kishi bo'lganda host o'yinni boshlaydi. Har bir telefonga faqat uning roli yuboriladi:
    - mafiya va don o'z jamoasini ko'radi;
    - detektiv yordamchisi detektivni ko'radi;
    - hamshira doktorni ko'radi.
-4. Host o'z telefonida kecha va kunni yuritadi. O'lganlar, kecha/kun va g'olib hamma telefonlarda ko'rinadi. Jurnal (detektiv tekshiruvlari va h.k.) faqat hostda.
-5. Sahifa yangilansa yoki telefon uxlab qolsa, o'yinchi va host avtomatik qaytadi (token `localStorage` da).
-6. O'yin boshlangach yangi o'yinchi qo'shila olmaydi. «Вернуться в лобби» xonani qayta ochadi.
+4. Host o'z telefonida kecha va kunni yuritadi. O'lganlar, kecha/kun va g'olib hamma telefonlarda ko'rinadi. Jurnal faqat hostda.
+5. Sahifa yangilansa, o'yinchi ham, host ham avtomatik qaytadi (`localStorage`).
+
+### Texnik tomoni
+
+- O'yin serveri yo'q. **Xona hostning brauzerida yashaydi**, o'yinchilar unga to'g'ridan-to'g'ri WebRTC (PeerJS) orqali ulanadi.
+- Bir-birini topish uchun bepul ochiq PeerJS serveri (`0.peerjs.com`) ishlatiladi. U faqat ulanishni o'rnatadi, o'yin ma'lumotlari u orqali o'tmaydi.
+- Shuning uchun **host sahifasi o'yin davomida ochiq turishi kerak**. Ekran o'chmasligi uchun Wake Lock yoqiladi. Host sahifani yangilasa, o'yin saqlanib qoladi va o'yinchilar o'zi qayta ulanadi.
+- Ba'zi mobil operatorlar tarmog'ida WebRTC ulanmasligi mumkin (TURN server yo'q). Bunday holda hamma bitta Wi-Fi'ga ulansa ishonchli ishlaydi.
+- O'z PeerJS serveringizdan foydalanish uchun sahifa skriptidan oldin `window.MAFIA_PEER = {host, port, path, secure}` ni belgilang.
+
+## Lokal ishga tushirish
+
+```bash
+npm start   # http://localhost:3000 (statik server)
+npm test    # o'yin mantig'i testlari
+```
 
 ## Tuzilma
 
 | Fayl | Vazifasi |
 |---|---|
-| `server.js` | Express + Socket.IO, voqealar, QR endpoint `/qr.svg` |
-| `rooms.js` | Xonalar, qo'shilish, rollar, kim nimani ko'rishi (tarmoqdan mustaqil) |
-| `public/roles.js` | Rollar va tarkib, server va brauzer uchun umumiy |
-| `public/index.html` | Onlayn mijoz: bosh sahifa, o'yinchi va host ekranlari |
-| `public/offline.html` | Asl bitta telefonli versiya |
+| `index.html` | Onlayn o'yin: bosh sahifa, o'yinchi va host ekranlari, PeerJS tarmoq qismi |
+| `room.js` | Xona qoidalari: qo'shilish, rollar, kim nimani ko'rishi (hostda ishlaydi) |
+| `roles.js` | Rollar va tarkib |
+| `offline.html` | Asl bitta telefonli versiya |
+| `vendor/` | PeerJS 1.5.5 va qrcode-generator 1.4.4 (CDN'ga bog'liq bo'lmaslik uchun) |
 | `test/` | `node --test` testlari |
-
-Xonalar server xotirasida saqlanadi va 6 soat faol bo'lmasa o'chadi. Server qayta ishga tushsa, xonalar yo'qoladi.
-
-## Internetga joylash
-
-Doimiy ishlaydigan Node.js server kerak (WebSocket qo'llab-quvvatlashi bilan). Masalan Render.com: yangi **Web Service**, build `npm install`, start `npm start`. Railway, Fly.io yoki oddiy VPS ham mos keladi. Statik hosting (GitHub Pages, Netlify) ishlamaydi.

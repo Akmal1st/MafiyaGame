@@ -39,7 +39,8 @@ select{width:100%;margin-top:4px;font-size:16px;padding:10px;border-radius:10px;
 .dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--ok);margin-right:6px;vertical-align:middle}
 .dot.off{background:var(--mut);opacity:.5}
 .link{word-break:break-all;font-size:15px;padding:10px;border-radius:10px;background:var(--bg);border:1px solid var(--ln);margin:8px 0}
-.qr{display:block;width:200px;height:200px;margin:8px auto;background:#fff;border-radius:12px;padding:8px}
+.qr{display:block;width:200px;height:200px;margin:8px auto;background:#fff;border-radius:12px;padding:10px}
+.qr svg{display:block;width:100%;height:100%}
 .bigcode{font-size:36px;font-weight:800;letter-spacing:6px;text-align:center;margin:4px 0}
 .err{color:var(--ac);font-size:14px;margin-top:8px;min-height:1em}
 .banner{position:sticky;top:0;z-index:5;background:var(--ac);color:#fff;text-align:center;padding:6px;border-radius:10px;font-size:14px;margin-bottom:10px}
@@ -49,8 +50,10 @@ a{color:var(--mut)}
 </head>
 <body>
 <div id="app"></div>
-<script src="/socket.io/socket.io.js"></script>
-<script src="/roles.js"></script>
+<script src="vendor/peerjs-1.5.5.min.js"></script>
+<script src="vendor/qrcode-generator-1.4.4.js"></script>
+<script src="roles.js"></script>
+<script src="room.js"></script>
 <script>
 const {R,ORDER,MIN_PLAYERS,composition,isMafia}=window.MafiaRoles;
 const app=document.getElementById("app");
@@ -68,40 +71,231 @@ const hostGameKey=code=>"mafia:host:"+code;
 
 // ---------- app state ----------
 const urlRoom=(new URLSearchParams(location.search).get("room")||"").trim().toUpperCase();
+const BASE=location.origin+location.pathname.replace(/index\.html$/,"");
 let V={screen:"loading",err:"",state:null,secret:null,showRole:false,me:null,session:store.get(SESSION_KEY)};
 let G=null; // host-side game tracker (only on the host's device)
 
-const socket=io({reconnectionDelayMax:4000});
-const emit=(ev,data)=>new Promise(res=>socket.timeout(8000).emit(ev,data,(err,r)=>res(err?{ok:false,error:"Нет связи с сервером"}:r)));
-
-function inviteLink(code){return `${location.origin}/?room=${code}`}
+function inviteLink(code){return `${BASE}?room=${code}`}
 function setSession(s){V.session=s;s?store.set(SESSION_KEY,s):store.del(SESSION_KEY)}
-function goHome(){setSession(null);G=null;V.state=null;V.secret=null;history.replaceState(null,"","/");V.screen="home";render()}
+function goHome(){
+ if(HR)store.del(roomKey(HR.code));
+ stopNet();setSession(null);G=null;HR=null;V.state=null;V.secret=null;V.err="";
+ history.replaceState(null,"",location.pathname);V.screen="home";render();
+}
 
-// ---------- connection lifecycle ----------
-let connectedOnce=false;
-socket.on("connect",async()=>{
- const first=!connectedOnce;connectedOnce=true;
+// ---------- networking: peer-to-peer (WebRTC via PeerJS) ----------
+// There is no game server. The host's browser holds the room; players connect to it directly.
+// The public PeerJS server is used only to find each other (signaling).
+const PEER_PREFIX="mafiyagame-v1-";
+// window.MAFIA_PEER can point to your own PeerJS server ({host, port, path, secure}); defaults to the free public one.
+const PEER_OPTS=Object.assign({debug:0},window.MAFIA_PEER||{});
+const rs=new MafiaRoom.RoomStore();
+const roomKey=code=>"mafia:room:"+code;
+let peer=null,HR=null,hostConn=null,reconnectTimer=null,wakeLock=null;
+const conns=new Set(); // host: open DataConnections (conn.playerId set after join)
+const net={online:false};
+
+function stopNet(){
+ clearTimeout(reconnectTimer);reconnectTimer=null;
+ conns.forEach(c=>{try{c.close()}catch{}});conns.clear();
+ if(hostConn){hostConn._closing=true;try{hostConn.close()}catch{}hostConn=null}
+ if(peer){try{peer.destroy()}catch{}peer=null}
+ net.online=false;
+ if(wakeLock){wakeLock.release().catch(()=>{});wakeLock=null}
+}
+
+// Keep the host's screen on: if the host phone sleeps, everyone loses the connection.
+async function keepAwake(){
+ try{if("wakeLock" in navigator&&!wakeLock&&document.visibilityState==="visible"){wakeLock=await navigator.wakeLock.request("screen");wakeLock.addEventListener("release",()=>{wakeLock=null})}}catch{}
+}
+document.addEventListener("visibilitychange",()=>{if(HR)keepAwake()});
+
+// ----- host side -----
+function hostBroadcast(){
+ if(!HR)return;
+ store.set(roomKey(HR.code),HR);
+ const st=rs.publicState(HR);
+ conns.forEach(c=>{if(c.open&&c.playerId)c.send({t:"sync",state:st,secret:rs.secretFor(HR,c.playerId)})});
+ onHostState(rs.hostView(HR));render();
+}
+function refreshConnected(){
+ HR.players.forEach(p=>{p.connected=[...conns].some(c=>c.open&&c.playerId===p.id)});
+}
+function onHostConnection(conn){
+ conns.add(conn);
+ conn.on("data",msg=>{
+  if(!HR||!msg||typeof msg!=="object")return;
+  const reply=o=>{if(conn.open)conn.send(o)};
+  const type=msg.t==="leave"?"left":"joined";
+  try{
+   if(msg.t==="join"){
+    const {player}=rs.join(HR.code,msg.name);
+    conn.playerId=player.id;player.connected=true;
+    reply({t:type,ok:true,token:player.token,playerId:player.id,name:player.name});
+   }else if(msg.t==="resume"){
+    const p=rs.findPlayer(HR,msg.token);
+    conn.playerId=p.id;p.connected=true;
+    reply({t:type,ok:true,playerId:p.id,name:p.name});
+   }else if(msg.t==="leave"){
+    const p=rs.findPlayer(HR,msg.token);
+    rs.remove(HR,p.id);conn.playerId=null;
+    reply({t:type,ok:true});
+   }else return;
+   hostBroadcast();
+  }catch(e){reply({t:type,ok:false,code:e.code||"error",error:e.message||"Ошибка"})}
+ });
+ const gone=()=>{if(!conns.delete(conn))return;if(HR){refreshConnected();hostBroadcast()}};
+ conn.on("close",gone);conn.on("error",gone);
+}
+// Claims the peer id for the room code. Returns false if the id is taken.
+function startHostPeer(code,resume){
+ return new Promise(res=>{
+  let tries=0,done=false;
+  const finish=v=>{if(!done){done=true;res(v)}};
+  const open=()=>{
+   const p=new Peer(PEER_PREFIX+code,PEER_OPTS);
+   p.on("open",()=>{peer=p;net.online=true;keepAwake();render();finish(true)});
+   p.on("connection",onHostConnection);
+   p.on("disconnected",()=>{net.online=false;render();setTimeout(()=>{if(!p.destroyed&&p.disconnected)p.reconnect()},2000)});
+   p.on("error",e=>{
+    if(e.type==="unavailable-id"){
+     p.destroy();
+     // After a reload the old id can stay reserved for a few seconds.
+     if(resume&&tries++<10)return setTimeout(open,3000);
+     return finish(false);
+    }
+    if(!p.open){net.online=false;render()}
+    if(!done&&(e.type==="network"||e.type==="server-error"||e.type==="browser-incompatible")){
+     if(e.type==="browser-incompatible")return finish(false);
+     setTimeout(()=>{if(!done){p.destroy();open()}},3000);
+    }
+   });
+  };
+  open();
+ });
+}
+const hostOps={
+ async "host:create"(){
+  stopNet();
+  for(let i=0;i<3;i++){
+   const room=rs.create();
+   HR=room;
+   if(await startHostPeer(room.code,false)){
+    store.set(roomKey(room.code),room);
+    return {ok:true,code:room.code,hostToken:room.hostToken,state:rs.hostView(room)};
+   }
+   rs.rooms.delete(room.code);HR=null;
+  }
+  return {ok:false,error:"Не удалось подключиться к сети. Проверьте интернет и попробуйте ещё раз."};
+ },
+ "host:kick"(d){
+  const p=rs.remove(HR,Number(d.playerId));
+  if(p)conns.forEach(c=>{if(c.playerId===p.id){c.send({t:"kicked"});c.playerId=null;setTimeout(()=>{try{c.close()}catch{}},500)}});
+  hostBroadcast();return {ok:true};
+ },
+ "host:start"(){rs.start(HR);hostBroadcast();return {ok:true,state:rs.hostView(HR)}},
+ "host:game"(d){rs.updateGame(HR,d.game);hostBroadcast();return {ok:true}},
+ "host:reset"(){rs.reset(HR);hostBroadcast();return {ok:true,state:rs.hostView(HR)}}
+};
+
+// ----- player side -----
+let pending=null; // {type, resolve}
+function ensurePeer(){
+ if(peer&&!peer.destroyed&&peer.open)return Promise.resolve(peer);
+ if(peer&&!peer.destroyed&&peer.disconnected){peer.reconnect()}
+ else if(!peer||peer.destroyed){peer=new Peer(PEER_OPTS);peer.on("disconnected",()=>setTimeout(()=>{if(peer&&!peer.destroyed&&peer.disconnected)peer.reconnect()},2000))}
+ const p=peer;
+ return new Promise((res,rej)=>{
+  const t=setTimeout(()=>{cleanup();rej(new Error("Нет связи с сетью. Проверьте интернет."))},12000);
+  const onOpen=()=>{cleanup();res(p)};
+  const onErr=e=>{if(["network","server-error","browser-incompatible","socket-error"].includes(e.type)){cleanup();rej(new Error(e.type==="browser-incompatible"?"Браузер не поддерживается":"Нет связи с сетью. Проверьте интернет."))}};
+  const cleanup=()=>{clearTimeout(t);p.off("open",onOpen);p.off("error",onErr)};
+  p.on("open",onOpen);p.on("error",onErr);
+ });
+}
+async function connectToHost(code){
+ const p=await ensurePeer();
+ return new Promise((res,rej)=>{
+  const c=p.connect(PEER_PREFIX+code,{reliable:true,serialization:"json"});
+  const fail=msg=>{cleanup();try{c.close()}catch{};const e=new Error(msg);e.code="host_offline";rej(e)};
+  const t=setTimeout(()=>fail("Ведущий не отвечает. Проверьте код и попросите ведущего не закрывать игру."),12000);
+  const onErr=e=>{if(e.type==="peer-unavailable")fail("Комната не найдена или ведущий не в сети. Проверьте ссылку.")};
+  const cleanup=()=>{clearTimeout(t);p.off("error",onErr)};
+  p.on("error",onErr);
+  c.on("open",()=>{cleanup();res(c)});
+ });
+}
+function attachHostConn(c){
+ if(hostConn&&hostConn!==c){hostConn._closing=true;try{hostConn.close()}catch{}}
+ hostConn=c;
+ c.on("data",msg=>{
+  if(!msg||typeof msg!=="object")return;
+  if(pending&&msg.t===pending.type){const p=pending;pending=null;p.resolve(msg);return}
+  if(msg.t==="sync"){V.state=msg.state;if(!msg.secret)V.showRole=false;V.secret=msg.secret;render()}
+  else if(msg.t==="kicked"){c._closing=true;stopNet();setSession(null);V.screen="kicked";render()}
+ });
+ const lost=()=>{if(c!==hostConn||c._closing)return;hostConn=null;net.online=false;render();scheduleReconnect(2000)};
+ c.on("close",lost);c.on("error",lost);
+}
+function request(c,msg,type){
+ return new Promise(res=>{
+  const t=setTimeout(()=>{if(pending&&pending.type===type)pending=null;res({ok:false,error:"Ведущий не отвечает"})},10000);
+  pending={type,resolve:r=>{clearTimeout(t);res(r)}};
+  c.send(msg);
+ });
+}
+function scheduleReconnect(ms){
+ clearTimeout(reconnectTimer);
+ if(V.session?.kind!=="player")return;
+ reconnectTimer=setTimeout(()=>playerResume(Math.min(ms*1.5,10000)),ms);
+}
+async function playerResume(nextDelay=3000){
+ const s=V.session;if(!s||s.kind!=="player")return;
+ let c;
+ try{c=await connectToHost(s.code)}catch(e){V.err=e.message;render();return scheduleReconnect(nextDelay)}
+ attachHostConn(c);
+ const r=await request(c,{t:"resume",token:s.token},"joined");
+ if(r.ok){V.me={id:r.playerId,name:r.name};net.online=true;V.err="";V.screen="player";render();return}
+ if(r.code==="no_player"||r.code==="no_room"){stopNet();setSession(null);V.screen="join";V.err="Вас нет в этой комнате — войдите заново.";return render()}
+ hostConn=null;c._closing=true;try{c.close()}catch{};scheduleReconnect(nextDelay);
+}
+const playerOps={
+ async "player:join"(d){
+  let c;
+  try{c=await connectToHost(d.code)}catch(e){return {ok:false,error:e.message}}
+  attachHostConn(c);
+  const r=await request(c,{t:"join",name:d.name},"joined");
+  if(!r.ok){hostConn=null;c._closing=true;try{c.close()}catch{}}else net.online=true;
+  return r;
+ },
+ async "player:leave"(d){
+  if(hostConn)await request(hostConn,{t:"leave",token:d.token},"left");
+  return {ok:true};
+ }
+};
+
+async function emit(ev,data){
+ const fn=hostOps[ev]||playerOps[ev];
+ if(!fn)return {ok:false,error:"unknown"};
+ try{return await fn(data||{})}catch(e){return {ok:false,code:e.code,error:e.message||"Ошибка"}}
+}
+
+// ---------- startup ----------
+async function boot(){
  const s=V.session;
- // Joining a different room by link takes priority over an old saved session.
  if(s&&(!urlRoom||urlRoom===s.code)){
   if(s.kind==="host"){
-   const r=await emit("host:resume",{code:s.code,hostToken:s.token});
-   if(r.ok){onHostState(r.state);if(first)V.screen="host";return render()}
-  }else{
-   const r=await emit("player:resume",{code:s.code,token:s.token});
-   if(r.ok){V.me={id:r.playerId,name:r.name};V.state=r.state;V.secret=r.secret;if(first)V.screen="player";return render()}
-  }
-  setSession(null); // room expired or we were removed
-  if(!first){V.screen=urlRoom?"join":"home";V.err="Комната больше не существует";return render()}
+   const saved=store.get(roomKey(s.code));
+   if(saved&&saved.hostToken===s.token){
+    HR=rs.restore(saved);onHostState(rs.hostView(HR));V.screen="host";render();
+    if(!await startHostPeer(HR.code,true)){V.err="Не удалось восстановить связь. Попробуйте обновить страницу или создайте новую игру.";render()}
+    return;
+   }
+  }else{V.screen="player";render();return playerResume()}
+  setSession(null);
  }
- if(first){V.screen=urlRoom?"join":"home";render()}
-});
-socket.on("disconnect",()=>render());
-socket.on("state",st=>{if(V.session?.kind==="player"){V.state=st;render()}});
-socket.on("secret",sec=>{V.secret=sec;if(!sec)V.showRole=false;render()});
-socket.on("host:state",st=>{onHostState(st);render()});
-socket.on("kicked",()=>{setSession(null);V.screen="kicked";render()});
+ V.screen=urlRoom?"join":"home";render();
+}
 
 function onHostState(st){
  V.state=st;
@@ -120,7 +314,7 @@ function onHostState(st){
 
 // ---------- rendering ----------
 function render(){
- const off=!socket.connected&&V.screen!=="loading"?`<div class="banner">Нет связи с сервером — переподключаемся…</div>`:"";
+ const off=!net.online&&(V.screen==="host"||V.screen==="player")?`<div class="banner">${V.screen==="host"?"Нет связи с сетью — переподключаемся…":"Нет связи с ведущим — переподключаемся…"}</div>`:"";
  const screens={loading,home,join,player,host,kicked};
  const y=scrollY;
  app.innerHTML=off+(screens[V.screen]||home)();
@@ -129,7 +323,8 @@ function render(){
 }
 const bind={};
 
-function loading(){return `<h1>🎭 Мафия</h1><p class="sub">Подключение…</p>`}
+function loading(){return `<h1>🎭 Мафия</h1><p class="sub">Подключение…</p>${V.err?`<p class="err center">${esc(V.err)}</p>`:""}<p class="sub"><a href="#" id="lhome">На главную</a></p>`}
+bind.loading=()=>{const l=$("lhome");if(l)l.onclick=e=>{e.preventDefault();goHome()}};
 
 function home(){return `
  <h1>🎭 Мафия онлайн</h1><p class="sub">Каждый играет со своего телефона</p>
@@ -138,17 +333,17 @@ function home(){return `
  <div class="card"><b>Я игрок</b><p class="sub" style="text-align:left;margin:6px 0 10px">Откройте ссылку от ведущего или введите код комнаты.</p>
   <div class="row"><input id="code" class="code" maxlength="5" placeholder="КОД" autocomplete="off"><button id="go">Войти</button></div>
   <div class="err">${esc(V.err)}</div></div>
- <p class="sub"><a href="/offline.html">Офлайн-режим: один телефон на всех</a></p>`}
+ <p class="sub"><a href="offline.html">Офлайн-режим: один телефон на всех</a></p>`}
 bind.home=()=>{
  $("create").onclick=async e=>{
   e.target.disabled=true;
   const r=await emit("host:create",{});
   if(!r.ok){V.err=r.error;return render()}
   setSession({kind:"host",code:r.code,token:r.hostToken});
-  history.replaceState(null,"","/");
+  history.replaceState(null,"",location.pathname);
   onHostState(r.state);V.err="";V.screen="host";render();
  };
- const go=()=>{const c=$("code").value.trim().toUpperCase();if(c.length<4)return;location.href="/?room="+encodeURIComponent(c)};
+ const go=()=>{const c=$("code").value.trim().toUpperCase();if(c.length<4)return;location.href=location.pathname+"?room="+encodeURIComponent(c)};
  $("go").onclick=go;$("code").onkeydown=e=>{if(e.key==="Enter")go()};
 };
 
@@ -157,7 +352,7 @@ function join(){return `
  <div class="card"><b>Как вас зовут?</b>
   <div class="row mt"><input id="nm" placeholder="Ваше имя" maxlength="20" autocomplete="off"><button id="jn">Войти</button></div>
   <div class="err">${esc(V.err)}</div></div>
- <p class="sub"><a href="/">На главную</a></p>`}
+ <p class="sub"><a href="./">На главную</a></p>`}
 bind.join=()=>{
  const inp=$("nm");inp.focus();
  const j=async()=>{
@@ -177,13 +372,14 @@ bind.kicked=()=>{$("home").onclick=goHome};
 function playerList(st,opts={}){
  return st.players.map((p,i)=>`<div class="pl ${p.dead?"dead":""}"><span><span class="dot ${p.connected?"":"off"}"></span><span class="n">${opts.started?(p.dead?"💀 ":"🙂 "):(i+1)+". "}${esc(p.name)}</span>${V.me&&p.id===V.me.id?" <b>(вы)</b>":""}</span>${opts.kick?`<button class="x" data-kick="${p.id}" title="Убрать">✕</button>`:""}</div>`).join("");
 }
+function qrSvg(text){try{const q=qrcode(0,"M");q.addData(text);q.make();return q.createSvgTag({cellSize:4,margin:0,scalable:true,alt:"QR-код ссылки"})}catch{return ""}}
 function compChips(c){return ORDER.filter(k=>c[k]>0).map(k=>`<span class="chip">${R[k].e} ${R[k].n}: <b>${c[k]}</b></span>`).join("")}
 function stageTitle(g){return g.stage==="day"?`☀️ День ${g.round}`:`🌙 Ночь ${g.round}`}
 
 // ---------- player screen ----------
 function player(){
  const st=V.state;if(!st)return loading();
- const N=st.players.length,host=st.hostConnected?"":`<p class="sub">⚠️ Ведущий не в сети</p>`;
+ const N=st.players.length,host="";
  if(!st.started){return `
   <h1>🎭 Комната ${esc(st.code)}</h1><p class="sub">Вы вошли как <b>${esc(V.me?.name||"")}</b></p>${host}
   <div class="card center"><b>Ждём начала игры…</b><p class="sub" style="margin:6px 0 0">Ведущий начнёт, когда все соберутся.</p></div>
@@ -205,10 +401,12 @@ function player(){
   ${st.game.winner?`<div class="card center" style="border-color:var(--ac)"><b style="font-size:20px">${esc(st.game.winner)}</b></div>`:""}
   ${meDead?`<div class="card center"><b>💀 Вы выбыли из игры</b><p class="sub" style="margin:6px 0 0">Не подсказывайте живым игрокам.</p></div>`:""}
   <div class="card center" style="padding:20px 16px">${roleHtml}</div>
-  <div class="card"><b>Живых: ${st.players.filter(p=>!p.dead).length} из ${N}</b>${playerList(st,{started:true})}</div>`;
+  <div class="card"><b>Живых: ${st.players.filter(p=>!p.dead).length} из ${N}</b>${playerList(st,{started:true})}</div>
+  <p class="sub"><a href="#" id="quit">Выйти из игры</a></p>`;
 }
 bind.player=()=>{
  const tg=$("tg");if(tg)tg.onclick=()=>{V.showRole=!V.showRole;render()};
+ const q=$("quit");if(q)q.onclick=e=>{e.preventDefault();if(confirm("Выйти из игры? Ваша роль останется у ведущего."))goHome()};
  const lv=$("leave");if(lv)lv.onclick=async()=>{
   if(!confirm("Выйти из комнаты?"))return;
   await emit("player:leave",{code:V.session.code,token:V.session.token});goHome();
@@ -226,7 +424,7 @@ function hostLobby(st){
  <h1>🎭 Вы ведущий</h1><p class="sub">Отправьте ссылку игрокам или покажите QR-код</p>
  <div class="card center">
   <div class="sub" style="margin:0">Код комнаты</div><div class="bigcode">${esc(st.code)}</div>
-  <img class="qr" src="/qr.svg?t=${encodeURIComponent(link)}" alt="QR-код ссылки">
+  <div class="qr">${qrSvg(link)}</div>
   <div class="link" id="lnk">${esc(link)}</div>
   <div class="row"><button class="sec" id="copy" style="flex:1">📋 Копировать</button>${navigator.share?`<button id="share" style="flex:1">📤 Поделиться</button>`:""}</div>
  </div>
@@ -358,7 +556,7 @@ function endVote(skip){
  G.round++;G.stage="night";G.votes={};saveG();render();
 }
 
-render();
+boot();
 </script>
 </body>
 </html>

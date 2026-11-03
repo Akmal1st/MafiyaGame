@@ -33,6 +33,14 @@ function normCode(raw) {
   return typeof raw === "string" ? raw.trim().toUpperCase() : "";
 }
 
+// Per-game state for phone actions.
+function clearPlay(room) {
+  room.picks = {};        // playerId -> {kind: targetId}; cleared each night/day
+  room.notes = {};        // playerId -> [private results]
+  room.selfHealUsed = {}; // healer id -> true once they healed themselves
+  room.lastBlock = null;  // last night's mistress target (can't repeat)
+}
+
 class RoomStore {
   constructor({ now = () => Date.now(), rnd } = {}) {
     this.rooms = new Map();
@@ -53,6 +61,7 @@ class RoomStore {
       started: false,
       roles: {}, // playerId -> role key
       game: { stage: "lobby", round: 0, dead: {}, winner: "" },
+      picks: {}, notes: {}, selfHealUsed: {}, lastBlock: null,
       nextId: 1,
       touched: this.now()
     };
@@ -105,6 +114,7 @@ class RoomStore {
     room.players.forEach((p, i) => { room.roles[p.id] = roles[i]; });
     room.started = true;
     room.game = { stage: "night", round: 1, dead: {}, winner: "" };
+    clearPlay(room);
   }
 
   // Back to the lobby with the same players; new people may join again.
@@ -112,6 +122,7 @@ class RoomStore {
     room.started = false;
     room.roles = {};
     room.game = { stage: "lobby", round: 0, dead: {}, winner: "" };
+    clearPlay(room);
   }
 
   // The host's device runs the game; it pushes the public part here for everyone to see.
@@ -120,12 +131,87 @@ class RoomStore {
     const ids = new Set(room.players.map(p => p.id));
     const dead = {};
     if (Array.isArray(g.dead)) g.dead.forEach(id => { if (ids.has(id)) dead[id] = true; });
+    const prev = room.game;
     room.game = {
       stage: g.stage === "day" ? "day" : "night",
       round: Number.isInteger(g.round) && g.round > 0 && g.round < 1000 ? g.round : room.game.round,
       dead,
       winner: typeof g.winner === "string" ? g.winner.slice(0, 80) : ""
     };
+    // A new night or day starts with empty choices.
+    if (prev.stage !== room.game.stage || prev.round !== room.game.round) room.picks = {};
+  }
+
+  // ----- actions players choose on their phones -----
+
+  // Which actions this player can take right now: kind -> allowed target ids.
+  actionsFor(room, playerId) {
+    const g = room.game, role = room.roles[playerId];
+    if (!room.started || !role || g.winner || g.dead[playerId]) return {};
+    const alive = room.players.filter(p => !g.dead[p.id]).map(p => p.id);
+    const others = alive.filter(id => id !== playerId);
+    const aliveRole = k => alive.some(id => room.roles[id] === k);
+    const out = {};
+    if (g.stage === "day") { out.vote = others; return out; }
+    if (isMafia(role)) out.mk = others.filter(id => !isMafia(room.roles[id]));
+    if (role === "don") out.dn = others;
+    if (role === "det" || (role === "ast" && !aliveRole("det"))) out.dt = others;
+    if (role === "doc" || (role === "nurse" && !aliveRole("doc")))
+      out.dc = room.selfHealUsed[playerId] ? others : alive;
+    if (role === "man") out.mn = others;
+    if (role === "mis") out.ms = others.filter(id => id !== room.lastBlock);
+    return out;
+  }
+
+  // Player picks (or clears, with target null) a target for one of their actions.
+  setPick(room, playerId, kind, target) {
+    const allowed = this.actionsFor(room, playerId)[kind];
+    if (!allowed) throw new GameError("no_action", "Сейчас это действие недоступно");
+    const picks = room.picks[playerId] || (room.picks[playerId] = {});
+    if (target === null || target === undefined || target === "") { delete picks[kind]; return; }
+    target = Number(target);
+    if (!allowed.includes(target)) throw new GameError("bad_target", "Этого игрока выбрать нельзя");
+    picks[kind] = target;
+  }
+
+  // The target chosen on phones for a night action (null if nobody chose).
+  // For the mafia kill the Don decides; otherwise the most popular choice wins.
+  phoneChoice(room, kind) {
+    const alive = id => !room.game.dead[id];
+    const pickers = Object.keys(room.picks).map(Number).filter(id => alive(id) && room.picks[id][kind] !== undefined);
+    if (!pickers.length) return null;
+    if (kind === "mk") {
+      const don = pickers.find(id => room.roles[id] === "don");
+      if (don !== undefined) return room.picks[don].mk;
+    }
+    const tally = {};
+    pickers.forEach(id => { const t = room.picks[id][kind]; tally[t] = (tally[t] || 0) + 1; });
+    return Number(Object.keys(tally).sort((a, b) => tally[b] - tally[a])[0]);
+  }
+
+  // Day votes from phones: target id -> number of votes.
+  voteTally(room) {
+    const tally = {};
+    Object.keys(room.picks).forEach(id => {
+      const t = room.picks[id].vote;
+      if (t !== undefined && !room.game.dead[id] && !room.game.dead[t]) tally[t] = (tally[t] || 0) + 1;
+    });
+    return tally;
+  }
+
+  // Who picked what, for the host to watch: [{id, kind, target}].
+  pickList(room) {
+    const out = [];
+    room.players.forEach(p => {
+      const pk = room.picks[p.id];
+      if (pk && !room.game.dead[p.id]) Object.keys(pk).forEach(kind => out.push({ id: p.id, kind, target: pk[kind] }));
+    });
+    return out;
+  }
+
+  // A private result (e.g. the detective's check) shown only to this player.
+  addNote(room, playerId, text) {
+    (room.notes[playerId] || (room.notes[playerId] = [])).push(String(text).slice(0, 200));
   }
 
   // What every participant may see.
@@ -149,6 +235,14 @@ class RoomStore {
     if (isMafia(role)) out.team = others(isMafia).map(p => ({ name: p.name, role: room.roles[p.id] }));
     if (role === "ast") out.knows = others(r => r === "det").map(p => ({ name: p.name, role: "det" }));
     if (role === "nurse") out.knows = others(r => r === "doc").map(p => ({ name: p.name, role: "doc" }));
+    out.actions = this.actionsFor(room, playerId);
+    out.picks = { ...(room.picks[playerId] || {}) };
+    out.notes = (room.notes[playerId] || []).slice();
+    // Mafia see what their teammates chose tonight.
+    if (isMafia(role) && room.game.stage === "night")
+      out.teamPicks = room.players
+        .filter(p => p.id !== playerId && isMafia(room.roles[p.id]) && !room.game.dead[p.id] && room.picks[p.id] && room.picks[p.id].mk !== undefined)
+        .map(p => ({ id: p.id, target: room.picks[p.id].mk }));
     return out;
   }
 
@@ -170,6 +264,8 @@ class RoomStore {
 RoomStore.prototype.restore = function (saved) {
   if (!saved || typeof saved.code !== "string" || !Array.isArray(saved.players)) return null;
   saved.players.forEach(p => { p.connected = false; });
+  ["picks", "notes", "selfHealUsed"].forEach(k => { if (!saved[k] || typeof saved[k] !== "object") saved[k] = {}; });
+  if (saved.lastBlock === undefined) saved.lastBlock = null;
   saved.touched = this.now();
   this.rooms.set(saved.code, saved);
   return saved;

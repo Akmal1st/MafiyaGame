@@ -46,6 +46,12 @@ select{width:100%;margin-top:4px;font-size:16px;padding:10px;border-radius:10px;
 .banner{position:sticky;top:0;z-index:5;background:var(--ac);color:#fff;text-align:center;padding:6px;border-radius:10px;font-size:14px;margin-bottom:10px}
 .mt{margin-top:10px}
 a{color:var(--mut)}
+.act{text-align:left;margin-top:14px;padding-top:12px;border-top:1px solid var(--ln)}
+.card>.act:first-child{margin-top:0;padding-top:0;border:0}
+.targets{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0 8px}
+.targets button{padding:9px 12px;font-size:15px}
+.targets button.on{background:var(--ac)}
+.picks{font-size:13px;color:var(--mut);margin-top:4px}
 </style>
 </head>
 <body>
@@ -126,7 +132,7 @@ function onHostConnection(conn){
  conn.on("data",msg=>{
   if(!HR||!msg||typeof msg!=="object")return;
   const reply=o=>{if(conn.open)conn.send(o)};
-  const type=msg.t==="leave"?"left":"joined";
+  const type=msg.t==="leave"?"left":msg.t==="act"?"acted":"joined";
   try{
    if(msg.t==="join"){
     const {player}=rs.join(HR.code,msg.name);
@@ -139,6 +145,10 @@ function onHostConnection(conn){
    }else if(msg.t==="leave"){
     const p=rs.findPlayer(HR,msg.token);
     rs.remove(HR,p.id);conn.playerId=null;
+    reply({t:type,ok:true});
+   }else if(msg.t==="act"){
+    const p=rs.findPlayer(HR,msg.token);
+    rs.setPick(HR,p.id,String(msg.kind||""),msg.target);
     reply({t:type,ok:true});
    }else return;
    hostBroadcast();
@@ -281,6 +291,10 @@ const playerOps={
   if(!r.ok){hostConn=null;c._closing=true;try{c.close()}catch{}}else net.online=true;
   return r;
  },
+ async "player:act"(d){
+  if(!hostConn)return {ok:false,error:"Нет связи с ведущим"};
+  return request(hostConn,{t:"act",token:V.session.token,kind:d.kind,target:d.target},"acted");
+ },
  async "player:leave"(d){
   if(hostConn)await request(hostConn,{t:"leave",token:d.token},"left");
   return {ok:true};
@@ -390,6 +404,26 @@ function compChips(c){return ORDER.filter(k=>c[k]>0).map(k=>`<span class="chip">
 function stageTitle(g){return g.stage==="day"?`☀️ День ${g.round}`:`🌙 Ночь ${g.round}`}
 
 // ---------- player screen ----------
+const ACT={
+ mk:["🔫 Кого убить этой ночью?","Решение за доном, если он в игре."],
+ dn:["🎩 Кого проверить: детектив или нет?","Ответ придёт утром сюда."],
+ dt:["🕵️ Кого проверить: мафия или нет?","Ответ придёт утром сюда."],
+ dc:["💉 Кого вылечить этой ночью?",""],
+ mn:["🔪 Кого убить этой ночью?",""],
+ ms:["💋 Кого отвлечь этой ночью?","Нельзя выбрать того же, что прошлой ночью."],
+ vote:["⚖️ Кого изгнать?","Нажмите ещё раз, чтобы отменить голос. Ведущий видит голоса."]
+};
+const ACT_ORDER=["vote","mk","dn","dt","dc","mn","ms"];
+const pname=id=>(V.state?.players.find(p=>p.id===id)||{}).name||"?";
+// Target buttons for each action this player can take now.
+function actionBlocks(sec,day){
+ const acts=sec.actions||{};
+ return ACT_ORDER.filter(k=>acts[k]&&(day?k==="vote":k!=="vote")).map(k=>{
+  const cur=sec.picks?.[k];
+  return `<div class="act"><b>${ACT[k][0]}</b>${ACT[k][1]?`<div class="sub" style="text-align:left;margin:2px 0 0">${ACT[k][1]}</div>`:""}
+   <div class="targets">${acts[k].map(id=>`<button class="${cur===id?"on":"sec"}" data-act="${k}" data-t="${id}">${cur===id?"✅ ":""}${esc(pname(id))}</button>`).join("")}</div>
+   <div class="sub" style="text-align:left;margin:0">${cur!==undefined?`Ваш выбор: <b>${esc(pname(cur))}</b>`:"Вы ещё не выбрали"}</div></div>`}).join("")+(V.err?`<div class="err">${esc(V.err)}</div>`:"");
+}
 function player(){
  const st=V.state;if(!st)return loading();
  const N=st.players.length,host="";
@@ -405,20 +439,32 @@ function player(){
   let extra="";
   if(isMafia(sec.role))extra=sec.team.length?`<div class="team">Твоя команда: <b>${sec.team.map(t=>esc(t.name)+(t.role==="don"?" 🎩":"")).join(", ")}</b></div>`:`<div class="team">Ты единственный в мафии.</div>`;
   if(sec.knows.length)extra+=`<div class="team">${sec.role==="ast"?"Детектив":"Доктор"}: <b>${sec.knows.map(t=>esc(t.name)).join(", ")}</b></div>`;
+  if(sec.teamPicks&&sec.teamPicks.length)extra+=`<div class="team">Выбор команды: ${sec.teamPicks.map(t=>`<b>${esc(pname(t.id))}</b> → ${esc(pname(t.target))}`).join(", ")}</div>`;
+  if(sec.notes&&sec.notes.length)extra+=`<div class="team" style="text-align:left"><b>🔒 Ваши результаты</b>${sec.notes.map(n=>`<div class="lg">${esc(n)}</div>`).join("")}</div>`;
+  const nightActs=st.game.stage==="night"?actionBlocks(sec,false):"";
+  const noAct=st.game.stage==="night"&&!meDead&&!st.game.winner&&!nightActs?`<p class="sub mt">🌙 Этой ночью у вас нет действия. Закройте глаза и ждите утра.</p>`:"";
   roleHtml=V.showRole
-   ?`<div class="role">${r.e}</div><div class="rname" style="color:${r.c}">${r.n}</div><div class="rdesc">${r.d}</div>${extra}<button class="sec big mt" id="tg">🙈 Скрыть роль</button>`
-   :`<div class="role">🂠</div><p class="sub">Убедитесь, что никто не смотрит в ваш экран.</p><button class="big" id="tg">👁 Показать мою роль</button>`;
+   ?`<div class="role">${r.e}</div><div class="rname" style="color:${r.c}">${r.n}</div><div class="rdesc">${r.d}</div>${extra}${nightActs}${noAct}<button class="sec big mt" id="tg">🙈 Скрыть роль</button>`
+   :`<div class="role">🂠</div><p class="sub">Убедитесь, что никто не смотрит в ваш экран.${st.game.stage==="night"&&!st.game.winner?"<br>Ночью откройте роль, чтобы сделать свой ход.":""}</p><button class="big" id="tg">👁 Показать мою роль</button>`;
  }
+ const vote=sec&&st.game.stage==="day"?actionBlocks(sec,true):"";
  return `
   <h1>${stageTitle(st.game)}</h1><p class="sub">Комната ${esc(st.code)} · ${esc(V.me?.name||"")}</p>${host}
   ${st.game.winner?`<div class="card center" style="border-color:var(--ac)"><b style="font-size:20px">${esc(st.game.winner)}</b></div>`:""}
   ${meDead?`<div class="card center"><b>💀 Вы выбыли из игры</b><p class="sub" style="margin:6px 0 0">Не подсказывайте живым игрокам.</p></div>`:""}
+  ${vote?`<div class="card">${vote}</div>`:""}
   <div class="card center" style="padding:20px 16px">${roleHtml}</div>
   <div class="card"><b>Живых: ${st.players.filter(p=>!p.dead).length} из ${N}</b>${playerList(st,{started:true})}</div>
   <p class="sub"><a href="#" id="quit">Выйти из игры</a></p>`;
 }
 bind.player=()=>{
  const tg=$("tg");if(tg)tg.onclick=()=>{V.showRole=!V.showRole;render()};
+ app.querySelectorAll("[data-act]").forEach(b=>b.onclick=async()=>{
+  const kind=b.dataset.act,t=+b.dataset.t,cur=V.secret?.picks?.[kind];
+  app.querySelectorAll(`[data-act="${kind}"]`).forEach(x=>x.disabled=true);
+  const r=await emit("player:act",{kind,target:cur===t?null:t});
+  if(!r.ok){V.err=r.error;render()}else V.err="";
+ });
  const q=$("quit");if(q)q.onclick=e=>{e.preventDefault();if(confirm("Выйти из игры? Ваша роль останется у ведущего."))goHome()};
  const lv=$("leave");if(lv)lv.onclick=async()=>{
   if(!confirm("Выйти из комнаты?"))return;
@@ -489,8 +535,10 @@ function saveG(){
  emit("host:game",{code:V.state.code,hostToken:V.session.token,game:{
   stage:G.stage,round:G.round,winner:winner(),dead:Object.keys(G.dead).filter(k=>G.dead[k]).map(Number)}});
 }
-function opts(sel){return `<option value="">— никого —</option>`+aliveIds().map(i=>`<option value="${i}" ${String(i)===String(sel)?"selected":""}>${esc(nameOf(i))}</option>`).join("")}
+function opts(sel,phone){return `<option value="">${phone!=null?"📱 по выбору с телефона: "+esc(nameOf(phone)):"— никого —"}</option>`+aliveIds().map(i=>`<option value="${i}" ${String(i)===String(sel)?"selected":""}>${esc(nameOf(i))}</option>`).join("")}
 
+// Votes = votes from phones + the host's manual correction.
+function totalVotes(i){return Math.max(0,(rs.voteTally(HR)[i]||0)+(G.votes[i]||0))}
 function hostGame(st){
  const a=aliveIds(),w=winner(),night=G.stage==="night";
  let h=`<h1>${night?"🌙 Ночь":"☀️ День"} ${G.round}</h1><p class="sub">Комната ${esc(st.code)} · Живых: ${a.length} из ${st.players.length}</p>`;
@@ -498,9 +546,13 @@ function hostGame(st){
  h+=`<div class="card"><div class="row" style="justify-content:space-between;align-items:center"><b>Игроки</b><button class="sec sm" id="tr">${G.showRoles?"🙈 Скрыть роли":"👁 Показать роли"}</button></div>`
  +st.players.map(p=>{const r=R[roleOf(p.id)];return `<div class="pl ${G.dead[p.id]?"dead":""}"><span><span class="dot ${p.connected?"":"off"}"></span><span class="n">${G.dead[p.id]?"💀":"🙂"} ${esc(p.name)}</span>${G.showRoles&&r?` · ${r.e} ${r.n}`:""}</span><button class="x tg" data-i="${p.id}" style="font-size:14px">${G.dead[p.id]?"вернуть":"выбыл"}</button></div>`}).join("")+`</div>`;
  if(!w&&night){
-  const f=(k,l,s)=>s?`<label class="fl">${l}<select data-k="${k}">${opts(G.night[k]??"")}</select></label>`:"";
+  const picks=rs.pickList(HR);
+  const who=k=>{const l=picks.filter(x=>x.kind===k);return `<div class="picks">${l.length?l.map(x=>`📱 ${esc(nameOf(x.id))} → <b>${esc(nameOf(x.target))}</b>`).join(" · "):"📱 ещё не выбрали"}</div>`};
+  const f=(k,l,s)=>s?`<label class="fl">${l}<select data-k="${k}">${opts(G.night[k]??"",rs.phoneChoice(HR,k))}</select></label>${who(k)}`:"";
   const anyMafia=a.some(i=>isMafia(roleOf(i)));
-  h+=`<div class="card"><b>Действия ночи</b>`
+  const actors=a.filter(i=>Object.keys(rs.actionsFor(HR,i)).length),done=actors.filter(i=>picks.some(x=>x.id===i));
+  h+=`<div class="card"><b>Действия ночи</b><div class="sub" style="text-align:left;margin:4px 0 0">Сделали ход с телефона: ${done.length} из ${actors.length}. Выбор с телефона подставляется сам — можно изменить вручную.</div>`
+   +f("dn","🎩 Кого проверил дон",aliveRole("don")!==undefined)
    +f("mk","🔫 Кого убила мафия",anyMafia)
    +f("mn","🔪 Кого убил маньяк",aliveRole("man")!==undefined)
    +f("dc","💉 Кого лечил доктор / медсестра",aliveRole("doc")!==undefined||aliveRole("nurse")!==undefined)
@@ -508,7 +560,10 @@ function hostGame(st){
    +f("dt","🕵️ Кого проверил детектив / помощник",aliveRole("det")!==undefined||aliveRole("ast")!==undefined)
    +`<button class="big" id="en" style="margin-top:14px">☀️ Подвести итоги ночи</button></div>`;
  }else if(!w){
-  h+=`<div class="card"><b>Голосование</b>`+a.map(i=>`<div class="pl"><span>${esc(nameOf(i))}</span><span><button class="sec vb" data-i="${i}" data-d="-1" style="padding:4px 14px">−</button> <b style="display:inline-block;min-width:28px;text-align:center">${G.votes[i]||0}</b> <button class="vb" data-i="${i}" data-d="1" style="padding:4px 14px">+</button></span></div>`).join("")
+  const picks=rs.pickList(HR).filter(x=>x.kind==="vote");
+  h+=`<div class="card"><b>Голосование</b><div class="sub" style="text-align:left;margin:4px 0 0">Проголосовали с телефона: ${picks.length} из ${a.length}. Голоса считаются сами, кнопками − / + можно поправить.</div>`
+   +(picks.length?`<div class="picks">${picks.map(x=>`📱 ${esc(nameOf(x.id))} → <b>${esc(nameOf(x.target))}</b>`).join(" · ")}</div>`:"")
+   +a.map(i=>`<div class="pl"><span>${esc(nameOf(i))}</span><span><button class="sec vb" data-i="${i}" data-d="-1" style="padding:4px 14px">−</button> <b style="display:inline-block;min-width:28px;text-align:center">${totalVotes(i)}</b> <button class="vb" data-i="${i}" data-d="1" style="padding:4px 14px">+</button></span></div>`).join("")
    +`<button class="big" id="ev" style="margin-top:14px">⚖️ Подвести голосование</button><button class="sec big" id="sk" style="margin-top:8px">Без изгнания</button></div>`;
  }
  h+=`<div class="card"><b>📜 Журнал</b> <span class="sub">(видит только ведущий)</span>`+(G.log.length?G.log.slice().reverse().map(l=>`<div class="lg">${l}</div>`).join(""):`<p class="sub" style="margin:8px 0 0;text-align:left">Пока пусто.</p>`)+`</div>`
@@ -525,7 +580,7 @@ function bindHostGame(st){
  $("tr").onclick=()=>{G.showRoles=!G.showRoles;store.set(hostGameKey(st.code),G);render()};
  app.querySelectorAll("select").forEach(s=>s.onchange=()=>{G.night[s.dataset.k]=s.value;store.set(hostGameKey(st.code),G)});
  app.querySelectorAll(".tg").forEach(b=>b.onclick=()=>{const i=+b.dataset.i;G.dead[i]=!G.dead[i];G.log.push(pre()+`ведущий вручную: <b>${esc(nameOf(i))}</b> ${G.dead[i]?"выбыл":"возвращён в игру"}`);saveG();render()});
- app.querySelectorAll(".vb").forEach(b=>b.onclick=()=>{const i=+b.dataset.i;G.votes[i]=Math.max(0,(G.votes[i]||0)+ +b.dataset.d);store.set(hostGameKey(st.code),G);render()});
+ app.querySelectorAll(".vb").forEach(b=>b.onclick=()=>{const i=+b.dataset.i,ph=rs.voteTally(HR)[i]||0;G.votes[i]=Math.max(-ph,(G.votes[i]||0)+ +b.dataset.d);store.set(hostGameKey(st.code),G);render()});
  const en=$("en");if(en)en.onclick=endNight;
  const ev=$("ev");if(ev)ev.onclick=()=>endVote(false);
  const sk=$("sk");if(sk)sk.onclick=()=>endVote(true);
@@ -535,34 +590,41 @@ function bindHostGame(st){
 }
 function endNight(){
  const n=G.night,nm=i=>`<b>${esc(nameOf(i))}</b>`,L=x=>G.log.push(`Ночь ${G.round}: ${x}`);
- const g=k=>n[k]===undefined||n[k]===""?null:+n[k];
- const mk=g("mk"),mn=g("mn"),dc=g("dc"),ms=g("ms"),dt=g("dt");
+ // Manual choice wins; otherwise use what players picked on their phones.
+ const g=k=>n[k]!==undefined&&n[k]!==""?+n[k]:rs.phoneChoice(HR,k);
+ const mk=g("mk"),mn=g("mn"),dc=g("dc"),ms=g("ms"),dt=g("dt"),dn=g("dn"),N=`Ночь ${G.round}`;
  const blocked=id=>id!==undefined&&id===ms;
  if(ms!==null)L(`любовница отвлекла ${nm(ms)}`);
  let saved=null;
  if(dc!==null){
   // The nurse heals only after the doctor is out.
   const doc=aliveRole("doc"),nurse=aliveRole("nurse"),healer=doc!==undefined?doc:nurse;
-  if(healer!==undefined&&!blocked(healer)){saved=dc;L(`лечили ${nm(dc)}`)}else L(`лечение ${nm(dc)} сорвано`);
+  if(healer!==undefined&&!blocked(healer)){saved=dc;L(`лечили ${nm(dc)}`);if(dc===healer)HR.selfHealUsed[healer]=true}else L(`лечение ${nm(dc)} сорвано`);
  }
  if(dt!==null){
   const det=aliveRole("det"),checker=det!==undefined?det:aliveRole("ast");
-  if(blocked(checker))L("проверка детектива сорвана");
-  else L(`детектив проверил ${nm(dt)}: ${isMafia(roleOf(dt))?"мафия":"не мафия"}`);
+  if(blocked(checker)){L("проверка детектива сорвана");if(checker!==undefined)rs.addNote(HR,checker,`${N}: вас отвлекли — проверка не удалась`)}
+  else{const res=isMafia(roleOf(dt))?"мафия":"не мафия";L(`детектив проверил ${nm(dt)}: ${res}`);if(checker!==undefined)rs.addNote(HR,checker,`${N}: ${nameOf(dt)} — ${res}`)}
  }
+ if(dn!==null){
+  const don=aliveRole("don");
+  if(blocked(don)){L("проверка дона сорвана");if(don!==undefined)rs.addNote(HR,don,`${N}: вас отвлекли — проверка не удалась`)}
+  else{const res=roleOf(dn)==="det"?"детектив":"не детектив";L(`дон проверил ${nm(dn)}: ${res}`);if(don!==undefined)rs.addNote(HR,don,`${N}: ${nameOf(dn)} — ${res}`)}
+ }
+ HR.lastBlock=ms;
  let any=false;
- [[mk,"мафия"],[mn,"маньяк"]].forEach(([t,by])=>{
+ [[mk,"мафия","а"],[mn,"маньяк",""]].forEach(([t,by,f])=>{
   if(t===null)return;
   if(by==="маньяк"&&blocked(aliveRole("man"))){L("маньяк был отвлечён — убийство не состоялось");return}
-  if(t===saved){L(`${by} стрелял в ${nm(t)} — <b>спасён!</b>`);return}
-  if(!G.dead[t]){G.dead[t]=true;any=true;L(`${by} убил ${nm(t)} 💀`)}
+  if(t===saved){L(`${by} стрелял${f} в ${nm(t)} — <b>спасён!</b>`);return}
+  if(!G.dead[t]){G.dead[t]=true;any=true;L(`${by} убил${f} ${nm(t)} 💀`)}
  });
  if(!any)L("этой ночью никто не погиб");
  G.stage="day";G.votes={};G.night={};saveG();render();
 }
 function endVote(skip){
- const a=aliveIds();let max=0;a.forEach(i=>max=Math.max(max,G.votes[i]||0));
- const top=a.filter(i=>(G.votes[i]||0)===max),D=x=>G.log.push(`День ${G.round}: ${x}`);
+ const a=aliveIds();let max=0;a.forEach(i=>max=Math.max(max,totalVotes(i)));
+ const top=a.filter(i=>totalVotes(i)===max),D=x=>G.log.push(`День ${G.round}: ${x}`);
  if(skip||max===0)D("никто не изгнан");
  else if(top.length>1)D(`ничья (${top.map(i=>esc(nameOf(i))).join(", ")}) — по ${max} гол., никто не изгнан`);
  else{G.dead[top[0]]=true;D(`изгнан <b>${esc(nameOf(top[0]))}</b> (${max} гол.) 💀`)}

@@ -21,7 +21,13 @@ Bepul GitHub hisobida Pages faqat **public** repolarda ishlaydi.
    - detektiv yordamchisi detektivni ko'radi;
    - hamshira doktorni ko'radi.
 4. Host o'z telefonida kecha va kunni yuritadi. O'lganlar, kecha/kun va g'olib hamma telefonlarda ko'rinadi. Jurnal faqat hostda.
-5. Sahifa yangilansa, o'yinchi ham, host ham avtomatik qaytadi (`localStorage`).
+5. **O'yinchilar amalni telefondan tanlaydi** (rolni ochganda ko'rinadi):
+   - kechasi: mafiya qurbon tanlaydi (don bo'lsa, uning tanlovi hal qiladi, jamoa bir-birining tanlovini ko'radi), don detektivni qidiradi, detektiv (u chiqsa yordamchi) tekshiradi, doktor (u chiqsa hamshira) davolaydi, manyak o'ldiradi, ma'shuqa chalg'itadi. Tinch aholining kechki amali yo'q;
+   - kunduzi: har bir tirik o'yinchi kimni chiqarishga ovoz beradi;
+   - host har bir tanlovni jonli ko'radi («📱 Ism → Nishon»), ular kecha formasiga va ovozlar soniga o'zi tushadi, host qo'lda o'zgartira oladi;
+   - detektiv va donning tekshiruv natijasi ertalab faqat ularning telefoniga keladi;
+   - doktor o'zini faqat bir marta davolay oladi, ma'shuqa bir odamni ketma-ket ikki kecha tanlay olmaydi.
+6. Sahifa yangilansa, o'yinchi ham, host ham avtomatik qaytadi (`localStorage`).
 
 ### Texnik tomoni
 

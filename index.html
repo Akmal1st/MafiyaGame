@@ -56,7 +56,7 @@ a{color:var(--mut)}
 </head>
 <body>
 <div id="app"></div>
-<script src="vendor/peerjs-1.5.5.min.js"></script>
+<script src="vendor/mqtt-5.10.4.min.js"></script>
 <script src="vendor/qrcode-generator-1.4.4.js"></script>
 <script src="roles.js"></script>
 <script src="room.js"></script>
@@ -83,124 +83,187 @@ let G=null; // host-side game tracker (only on the host's device)
 
 function inviteLink(code){return `${BASE}?room=${code}`}
 function setSession(s){V.session=s;s?store.set(SESSION_KEY,s):store.del(SESSION_KEY)}
+
+// ---------- networking: public MQTT brokers over secure WebSockets ----------
+// There is no game server. The host's browser holds the room; players send messages to it
+// through free public MQTT brokers (plain WSS, no WebRTC, so it works on mobile networks).
+// The host listens on every broker it can reach; each player uses whichever one works for them.
+// Messages are end-to-end encrypted (ECDH P-256 + AES-GCM), so nobody watching a broker sees roles.
+// window.MAFIA_MQTT can replace the broker list (array of wss:// URLs).
+const BROKERS=window.MAFIA_MQTT||["wss://broker.emqx.io:8084/mqtt","wss://broker.hivemq.com:8884/mqtt","wss://test.mosquitto.org:8081/mqtt"];
+const TOPIC="mafiyagame/v1/";
+const rs=new MafiaRoom.RoomStore();
+const roomKey=code=>"mafia:room:"+code;
+let HR=null,hostPriv=null,clients=[],pc=null,heartbeat=null,wakeLock=null,lastHeard=0;
+const conns=new Map(); // host: cid -> {cid,pub,key,client,playerId,seen}
+const net={online:false};
+const randHex=n=>Array.from(crypto.getRandomValues(new Uint8Array(n)),b=>b.toString(16).padStart(2,"0")).join("");
+
+// ----- crypto -----
+const b64=buf=>{const a=new Uint8Array(buf);let s="";for(let i=0;i<a.length;i+=8192)s+=String.fromCharCode.apply(null,a.subarray(i,i+8192));return btoa(s)};
+const unb64=s=>Uint8Array.from(atob(s),c=>c.charCodeAt(0));
+const ECDH={name:"ECDH",namedCurve:"P-256"};
+const genKeys=()=>crypto.subtle.generateKey(ECDH,true,["deriveKey"]);
+const exportPub=async k=>b64(await crypto.subtle.exportKey("raw",k));
+async function derive(priv,pubB64){
+ const pub=await crypto.subtle.importKey("raw",unb64(pubB64),ECDH,false,[]);
+ return crypto.subtle.deriveKey({name:"ECDH",public:pub},priv,{name:"AES-GCM",length:256},false,["encrypt","decrypt"]);
+}
+async function seal(key,obj){
+ const iv=crypto.getRandomValues(new Uint8Array(12));
+ const d=await crypto.subtle.encrypt({name:"AES-GCM",iv},key,new TextEncoder().encode(JSON.stringify(obj)));
+ return {iv:b64(iv),d:b64(d)};
+}
+async function unseal(key,m){
+ const d=await crypto.subtle.decrypt({name:"AES-GCM",iv:unb64(m.iv)},key,unb64(m.d));
+ return JSON.parse(new TextDecoder().decode(d));
+}
+
+// ----- brokers -----
+function connectBroker(url){
+ return new Promise((res,rej)=>{
+  let c;
+  try{c=mqtt.connect(url,{clientId:"mf_"+randHex(8),clean:true,connectTimeout:8000,reconnectPeriod:3000,keepalive:30})}catch(e){return rej(e)}
+  const t=setTimeout(()=>{c.end(true);rej(new Error("timeout "+url))},10000);
+  c.once("connect",()=>{clearTimeout(t);res(c)});
+  c.on("error",()=>{});
+ });
+}
+function stopNet(clearRoom){
+ clearInterval(heartbeat);heartbeat=null;
+ if(clearRoom&&HR)clients.forEach(c=>{try{c.publish(TOPIC+HR.code+"/k","",{retain:true,qos:1})}catch{}});
+ const old=clients;clients=[];setTimeout(()=>old.forEach(c=>{try{c.end(true)}catch{}}),clearRoom?800:0);
+ if(pc){try{pc.client.end(true)}catch{}pc=null}
+ conns.clear();net.online=false;hostPriv=null;
+ if(wakeLock){wakeLock.release().catch(()=>{});wakeLock=null}
+}
 function goHome(){
  if(HR)store.del(roomKey(HR.code));
- stopNet();setSession(null);G=null;HR=null;V.state=null;V.secret=null;V.err="";
+ stopNet(true);setSession(null);G=null;HR=null;V.state=null;V.secret=null;V.err="";
  history.replaceState(null,"",location.pathname);V.screen="home";render();
 }
 
-// ---------- networking: peer-to-peer (WebRTC via PeerJS) ----------
-// There is no game server. The host's browser holds the room; players connect to it directly.
-// The public PeerJS server is used only to find each other (signaling).
-const PEER_PREFIX="mafiyagame-v1-";
-// window.MAFIA_PEER can point to your own PeerJS server ({host, port, path, secure}); defaults to the free public one.
-const PEER_OPTS=Object.assign({debug:0},window.MAFIA_PEER||{});
-const rs=new MafiaRoom.RoomStore();
-const roomKey=code=>"mafia:room:"+code;
-let peer=null,HR=null,hostConn=null,reconnectTimer=null,wakeLock=null;
-const conns=new Set(); // host: open DataConnections (conn.playerId set after join)
-const net={online:false};
-
-function stopNet(){
- clearTimeout(reconnectTimer);reconnectTimer=null;
- conns.forEach(c=>{try{c.close()}catch{}});conns.clear();
- if(hostConn){hostConn._closing=true;try{hostConn.close()}catch{}hostConn=null}
- if(peer){try{peer.destroy()}catch{}peer=null}
- net.online=false;
- if(wakeLock){wakeLock.release().catch(()=>{});wakeLock=null}
-}
-
-// Keep the host's screen on: if the host phone sleeps, everyone loses the connection.
+// Keep the host's screen on: if the host phone sleeps, players can't reach the room.
 async function keepAwake(){
  try{if("wakeLock" in navigator&&!wakeLock&&document.visibilityState==="visible"){wakeLock=await navigator.wakeLock.request("screen");wakeLock.addEventListener("release",()=>{wakeLock=null})}}catch{}
 }
 document.addEventListener("visibilitychange",()=>{if(HR)keepAwake()});
 
 // ----- host side -----
+const ALIVE_MS=25000; // a player is shown offline after this long without a message
+function sendTo(conn,obj){
+ if(!HR)return;
+ seal(conn.key,obj).then(s=>{try{conn.client.publish(TOPIC+HR.code+"/p/"+conn.cid,JSON.stringify(s),{qos:1})}catch{}});
+}
 function hostBroadcast(){
  if(!HR)return;
  store.set(roomKey(HR.code),HR);
  const st=rs.publicState(HR);
- conns.forEach(c=>{if(c.open&&c.playerId)c.send({t:"sync",state:st,secret:rs.secretFor(HR,c.playerId)})});
+ conns.forEach(c=>{if(c.playerId)sendTo(c,{t:"sync",state:st,secret:rs.secretFor(HR,c.playerId)})});
  onHostState(rs.hostView(HR));render();
 }
 function refreshConnected(){
- HR.players.forEach(p=>{p.connected=[...conns].some(c=>c.open&&c.playerId===p.id)});
-}
-function onHostConnection(conn){
- conns.add(conn);
- conn.on("data",msg=>{
-  if(!HR||!msg||typeof msg!=="object")return;
-  const reply=o=>{if(conn.open)conn.send(o)};
-  const type=msg.t==="leave"?"left":msg.t==="act"?"acted":"joined";
-  try{
-   if(msg.t==="join"){
-    const {player}=rs.join(HR.code,msg.name);
-    conn.playerId=player.id;player.connected=true;
-    reply({t:type,ok:true,token:player.token,playerId:player.id,name:player.name});
-   }else if(msg.t==="resume"){
-    const p=rs.findPlayer(HR,msg.token);
-    conn.playerId=p.id;p.connected=true;
-    reply({t:type,ok:true,playerId:p.id,name:p.name});
-   }else if(msg.t==="leave"){
-    const p=rs.findPlayer(HR,msg.token);
-    rs.remove(HR,p.id);conn.playerId=null;
-    reply({t:type,ok:true});
-   }else if(msg.t==="act"){
-    const p=rs.findPlayer(HR,msg.token);
-    rs.setPick(HR,p.id,String(msg.kind||""),msg.target);
-    reply({t:type,ok:true});
-   }else return;
-   hostBroadcast();
-  }catch(e){reply({t:type,ok:false,code:e.code||"error",error:e.message||"Ошибка"})}
+ const now=Date.now();let changed=false;
+ HR.players.forEach(p=>{
+  const on=[...conns.values()].some(c=>c.playerId===p.id&&now-c.seen<ALIVE_MS);
+  if(p.connected!==on){p.connected=on;changed=true}
  });
- const gone=()=>{if(!conns.delete(conn))return;if(HR){refreshConnected();hostBroadcast()}};
- conn.on("close",gone);conn.on("error",gone);
+ return changed;
 }
-// Claims the peer id for the room code. Returns false if the id is taken.
-function startHostPeer(code,resume){
+function bindConn(conn,p){
+ // One live connection per player: a reloaded page replaces the old one.
+ conns.forEach((c,k)=>{if(c!==conn&&c.playerId===p.id)conns.delete(k)});
+ conn.playerId=p.id;p.connected=true;
+}
+async function onHostMessage(client,payload){
+ if(!HR||!hostPriv)return;
+ let m;try{m=JSON.parse(payload.toString())}catch{return}
+ if(!m||typeof m.c!=="string"||m.c.length>40||typeof m.pub!=="string"||m.pub.length>200)return;
+ let conn=conns.get(m.c);
+ if(!conn||conn.pub!==m.pub){
+  let key;try{key=await derive(hostPriv,m.pub)}catch{return}
+  conn={cid:m.c,pub:m.pub,key,client,playerId:null,seen:0};conns.set(m.c,conn);
+ }
+ let msg;try{msg=await unseal(conn.key,m)}catch{return}
+ if(!msg||typeof msg!=="object")return;
+ conn.client=client;conn.seen=Date.now();
+ const reply=o=>sendTo(conn,o);
+ const type=msg.t==="leave"?"left":msg.t==="act"?"acted":"joined";
+ try{
+  if(msg.t==="ping"){
+   // Heartbeat; also re-binds a player after the host reloaded the page.
+   let p=null;try{p=rs.findPlayer(HR,msg.token)}catch{}
+   if(p&&conn.playerId!==p.id){bindConn(conn,p);return hostBroadcast()}
+   if(refreshConnected())hostBroadcast();
+   return reply({t:"pong"});
+  }
+  if(msg.t==="join"){
+   const {player}=rs.join(HR.code,msg.name);
+   bindConn(conn,player);
+   reply({t:type,ok:true,token:player.token,playerId:player.id,name:player.name});
+  }else if(msg.t==="resume"){
+   const p=rs.findPlayer(HR,msg.token);
+   bindConn(conn,p);
+   reply({t:type,ok:true,playerId:p.id,name:p.name});
+  }else if(msg.t==="leave"){
+   const p=rs.findPlayer(HR,msg.token);
+   rs.remove(HR,p.id);conn.playerId=null;
+   reply({t:type,ok:true});
+  }else if(msg.t==="act"){
+   const p=rs.findPlayer(HR,msg.token);
+   rs.setPick(HR,p.id,String(msg.kind||""),msg.target);
+   reply({t:type,ok:true});
+  }else return;
+  hostBroadcast();
+ }catch(e){reply({t:type,ok:false,code:e.code||"error",error:e.message||"Ошибка"})}
+}
+function hostOnline(){net.online=clients.some(c=>c.connected);render()}
+function attachHostClient(c){
+ if(!HR){c.end(true);return}
+ const code=HR.code;
+ const announce=()=>{c.subscribe(TOPIC+code+"/h",{qos:1});c.publish(TOPIC+code+"/k",JSON.stringify({pub:HR.hostKey.pub}),{retain:true,qos:1})};
+ announce();
+ c.on("connect",()=>{announce();hostOnline()});
+ c.on("close",hostOnline);c.on("offline",hostOnline);
+ c.on("message",(topic,payload)=>{if(topic===TOPIC+code+"/h")onHostMessage(c,payload)});
+ clients.push(c);hostOnline();
+}
+// Connects to every broker it can; resolves true as soon as one works.
+async function startHost(){
+ const priv=await crypto.subtle.importKey("jwk",HR.hostKey.priv,ECDH,false,["deriveKey"]);
+ hostPriv=priv;
+ clearInterval(heartbeat);
+ heartbeat=setInterval(()=>{
+  if(!HR)return;
+  conns.forEach((c,k)=>{if(Date.now()-c.seen>5*60000)conns.delete(k)});
+  if(refreshConnected())hostBroadcast();
+ },5000);
+ keepAwake();
  return new Promise(res=>{
-  let tries=0,done=false;
-  const finish=v=>{if(!done){done=true;res(v)}};
-  const open=()=>{
-   const p=new Peer(PEER_PREFIX+code,PEER_OPTS);
-   p.on("open",()=>{peer=p;net.online=true;keepAwake();render();finish(true)});
-   p.on("connection",onHostConnection);
-   p.on("disconnected",()=>{net.online=false;render();setTimeout(()=>{if(!p.destroyed&&p.disconnected)p.reconnect()},2000)});
-   p.on("error",e=>{
-    if(e.type==="unavailable-id"){
-     p.destroy();
-     // After a reload the old id can stay reserved for a few seconds.
-     if(resume&&tries++<10)return setTimeout(open,3000);
-     return finish(false);
-    }
-    if(!p.open){net.online=false;render()}
-    if(!done&&(e.type==="network"||e.type==="server-error"||e.type==="browser-incompatible")){
-     if(e.type==="browser-incompatible")return finish(false);
-     setTimeout(()=>{if(!done){p.destroy();open()}},3000);
-    }
-   });
-  };
-  open();
+  let left=BROKERS.length,done=false;
+  BROKERS.forEach(url=>connectBroker(url).then(c=>{
+   if(hostPriv!==priv){c.end(true);return}
+   attachHostClient(c);if(!done){done=true;res(true)}
+  },()=>{if(--left===0&&!done){done=true;res(false)}}));
  });
 }
 const hostOps={
  async "host:create"(){
   stopNet();
-  for(let i=0;i<3;i++){
-   const room=rs.create();
-   HR=room;
-   if(await startHostPeer(room.code,false)){
-    store.set(roomKey(room.code),room);
-    return {ok:true,code:room.code,hostToken:room.hostToken,state:rs.hostView(room)};
-   }
-   rs.rooms.delete(room.code);HR=null;
+  const room=rs.create();
+  const keys=await genKeys();
+  room.hostKey={priv:await crypto.subtle.exportKey("jwk",keys.privateKey),pub:await exportPub(keys.publicKey)};
+  HR=room;
+  if(await startHost()){
+   store.set(roomKey(room.code),room);
+   return {ok:true,code:room.code,hostToken:room.hostToken,state:rs.hostView(room)};
   }
+  stopNet();rs.rooms.delete(room.code);HR=null;
   return {ok:false,error:"Не удалось подключиться к сети. Проверьте интернет и попробуйте ещё раз."};
  },
  "host:kick"(d){
   const p=rs.remove(HR,Number(d.playerId));
-  if(p)conns.forEach(c=>{if(c.playerId===p.id){c.send({t:"kicked"});c.playerId=null;setTimeout(()=>{try{c.close()}catch{}},500)}});
+  if(p)conns.forEach((c,k)=>{if(c.playerId===p.id){sendTo(c,{t:"kicked"});conns.delete(k)}});
   hostBroadcast();return {ok:true};
  },
  "host:start"(){rs.start(HR);hostBroadcast();return {ok:true,state:rs.hostView(HR)}},
@@ -210,95 +273,98 @@ const hostOps={
 
 // ----- player side -----
 let pending=null; // {type, resolve}
-// Players pick their own random peer id: asking the public server for one (HTTP /peerjs/id)
-// fails on some mobile networks, while the host (who always uses a fixed id) connects fine.
-const randomPeerId=()=>PEER_PREFIX+"p-"+Array.from(crypto.getRandomValues(new Uint8Array(10)),b=>b.toString(16).padStart(2,"0")).join("");
-function openPlayerPeer(){
- if(peer&&!peer.destroyed&&peer.open)return Promise.resolve(peer);
- if(peer){try{peer.destroy()}catch{}peer=null}
- const p=new Peer(randomPeerId(),PEER_OPTS);
- peer=p;
- p.on("disconnected",()=>setTimeout(()=>{if(!p.destroyed&&p.disconnected)p.reconnect()},2000));
+const HOST_OFFLINE="Комната не найдена или ведущий не в сети. Проверьте ссылку и попросите ведущего не закрывать игру.";
+// Tries all brokers at once; uses the first one where the host's room is announced.
+function findHost(code){
  return new Promise((res,rej)=>{
-  const fail=type=>{cleanup();if(peer===p)peer=null;try{p.destroy()}catch{};const e=new Error(type);e.type=type;rej(e)};
-  const t=setTimeout(()=>fail("timeout"),15000);
-  const onOpen=()=>{cleanup();res(p)};
-  const onErr=e=>{if(["network","server-error","browser-incompatible","socket-error","socket-closed","unavailable-id"].includes(e.type))fail(e.type)};
-  const cleanup=()=>{clearTimeout(t);p.off("open",onOpen);p.off("error",onErr)};
-  p.on("open",onOpen);p.on("error",onErr);
+  let left=BROKERS.length,done=false,sawBroker=false;
+  const fail=()=>{if(--left===0&&!done){done=true;rej(new Error(sawBroker?HOST_OFFLINE:"Нет связи с сетью. Проверьте интернет и попробуйте ещё раз."))}};
+  BROKERS.forEach(url=>connectBroker(url).then(c=>{
+   if(done){c.end(true);return}
+   sawBroker=true;
+   const kt=TOPIC+code+"/k";
+   const t=setTimeout(()=>{c.end(true);fail()},8000);
+   const first=(topic,payload)=>{
+    if(topic!==kt)return;
+    let pub=null;try{pub=JSON.parse(payload.toString()).pub}catch{}
+    clearTimeout(t);c.removeListener("message",first);
+    if(done||!pub){c.end(true);if(!pub)fail();return}
+    done=true;res({client:c,hostPub:pub});
+   };
+   c.on("message",first);
+   c.subscribe(kt,{qos:1});
+  },fail));
  });
 }
-async function ensurePeer(){
- let last;
- for(let i=0;i<3;i++){
-  try{return await openPlayerPeer()}
-  catch(e){last=e;if(e.type==="browser-incompatible")break;await new Promise(r=>setTimeout(r,1500))}
- }
- throw new Error(last&&last.type==="browser-incompatible"?"Браузер не поддерживается — откройте в Chrome или Safari":`Нет связи с сетью. Проверьте интернет и попробуйте ещё раз. (${last?last.type:"?"})`);
-}
-async function connectToHost(code){
- const p=await ensurePeer();
- return new Promise((res,rej)=>{
-  const c=p.connect(PEER_PREFIX+code,{reliable:true,serialization:"json"});
-  const fail=msg=>{cleanup();try{c.close()}catch{};const e=new Error(msg);e.code="host_offline";rej(e)};
-  const t=setTimeout(()=>fail("Ведущий не отвечает. Проверьте код и попросите ведущего не закрывать игру."),12000);
-  const onErr=e=>{if(e.type==="peer-unavailable")fail("Комната не найдена или ведущий не в сети. Проверьте ссылку.")};
-  const cleanup=()=>{clearTimeout(t);p.off("error",onErr)};
-  p.on("error",onErr);
-  c.on("open",()=>{cleanup();res(c)});
+async function playerConnect(code){
+ if(pc&&pc.code===code&&pc.client.connected)return pc;
+ if(pc){try{pc.client.end(true)}catch{}pc=null}
+ const {client,hostPub}=await findHost(code);
+ const keys=await genKeys();
+ const me={client,code,cid:randHex(10),pub:await exportPub(keys.publicKey),priv:keys.privateKey,key:await derive(keys.privateKey,hostPub),hostPub};
+ const pt=TOPIC+code+"/p/"+me.cid,kt=TOPIC+code+"/k";
+ client.subscribe(pt,{qos:1});
+ client.on("message",async(topic,payload)=>{
+  if(pc!==me)return;
+  if(topic===kt){ // host re-announced (same key after a reload; a new key means a new room)
+   let pub=null;try{pub=JSON.parse(payload.toString()).pub}catch{}
+   if(!pub){net.online=false;V.err="Ведущий закрыл комнату.";render()}
+   return;
+  }
+  if(topic!==pt)return;
+  let msg;try{msg=await unseal(me.key,JSON.parse(payload.toString()))}catch{return}
+  onPlayerMessage(msg);
  });
+ client.on("close",()=>{if(pc===me){net.online=false;render()}});
+ pc=me;
+ startPlayerHeartbeat();
+ return me;
 }
-function attachHostConn(c){
- if(hostConn&&hostConn!==c){hostConn._closing=true;try{hostConn.close()}catch{}}
- hostConn=c;
- c.on("data",msg=>{
-  if(!msg||typeof msg!=="object")return;
-  if(pending&&msg.t===pending.type){const p=pending;pending=null;p.resolve(msg);return}
-  if(msg.t==="sync"){V.state=msg.state;if(!msg.secret)V.showRole=false;V.secret=msg.secret;render()}
-  else if(msg.t==="kicked"){c._closing=true;stopNet();setSession(null);V.screen="kicked";render()}
- });
- const lost=()=>{if(c!==hostConn||c._closing)return;hostConn=null;net.online=false;render();scheduleReconnect(2000)};
- c.on("close",lost);c.on("error",lost);
+function playerSend(obj){
+ if(!pc)return false;
+ seal(pc.key,obj).then(s=>{try{pc.client.publish(TOPIC+pc.code+"/h",JSON.stringify({c:pc.cid,pub:pc.pub,...s}),{qos:1})}catch{}});
+ return true;
 }
-function request(c,msg,type){
+function onPlayerMessage(msg){
+ if(!msg||typeof msg!=="object")return;
+ lastHeard=Date.now();
+ if(!net.online){net.online=true;V.err="";render()}
+ if(pending&&msg.t===pending.type){const p=pending;pending=null;p.resolve(msg);return}
+ if(msg.t==="sync"){V.state=msg.state;if(!msg.secret)V.showRole=false;V.secret=msg.secret;render()}
+ else if(msg.t==="kicked"){stopNet();setSession(null);V.screen="kicked";render()}
+}
+function startPlayerHeartbeat(){
+ clearInterval(heartbeat);
+ heartbeat=setInterval(()=>{
+  if(!pc||V.session?.kind!=="player")return;
+  playerSend({t:"ping",token:V.session.token});
+  if(net.online&&Date.now()-lastHeard>ALIVE_MS){net.online=false;render()}
+ },8000);
+}
+function request(msg,type){
  return new Promise(res=>{
-  const t=setTimeout(()=>{if(pending&&pending.type===type)pending=null;res({ok:false,error:"Ведущий не отвечает"})},10000);
+  const t=setTimeout(()=>{if(pending&&pending.type===type)pending=null;res({ok:false,error:"Ведущий не отвечает. Попросите ведущего не закрывать игру."})},12000);
   pending={type,resolve:r=>{clearTimeout(t);res(r)}};
-  c.send(msg);
+  if(!playerSend(msg)){clearTimeout(t);pending=null;res({ok:false,error:"Нет связи с ведущим"})}
  });
 }
-function scheduleReconnect(ms){
- clearTimeout(reconnectTimer);
- if(V.session?.kind!=="player")return;
- reconnectTimer=setTimeout(()=>playerResume(Math.min(ms*1.5,10000)),ms);
-}
-async function playerResume(nextDelay=3000){
+async function playerResume(retry=3000){
  const s=V.session;if(!s||s.kind!=="player")return;
- let c;
- try{c=await connectToHost(s.code)}catch(e){V.err=e.message;render();return scheduleReconnect(nextDelay)}
- attachHostConn(c);
- const r=await request(c,{t:"resume",token:s.token},"joined");
- if(r.ok){V.me={id:r.playerId,name:r.name};net.online=true;V.err="";V.screen="player";render();return}
+ try{await playerConnect(s.code)}catch(e){V.err=e.message;render();return setTimeout(()=>playerResume(Math.min(retry*1.5,15000)),retry)}
+ const r=await request({t:"resume",token:s.token},"joined");
+ if(r.ok){V.me={id:r.playerId,name:r.name};net.online=true;lastHeard=Date.now();V.err="";V.screen="player";render();return}
  if(r.code==="no_player"||r.code==="no_room"){stopNet();setSession(null);V.screen="join";V.err="Вас нет в этой комнате — войдите заново.";return render()}
- hostConn=null;c._closing=true;try{c.close()}catch{};scheduleReconnect(nextDelay);
+ V.err=r.error;render();setTimeout(()=>playerResume(Math.min(retry*1.5,15000)),retry);
 }
 const playerOps={
  async "player:join"(d){
-  let c;
-  try{c=await connectToHost(d.code)}catch(e){return {ok:false,error:e.message}}
-  attachHostConn(c);
-  const r=await request(c,{t:"join",name:d.name},"joined");
-  if(!r.ok){hostConn=null;c._closing=true;try{c.close()}catch{}}else net.online=true;
+  try{await playerConnect(d.code)}catch(e){return {ok:false,error:e.message}}
+  const r=await request({t:"join",name:d.name},"joined");
+  if(r.ok){net.online=true;lastHeard=Date.now()}
   return r;
  },
- async "player:act"(d){
-  if(!hostConn)return {ok:false,error:"Нет связи с ведущим"};
-  return request(hostConn,{t:"act",token:V.session.token,kind:d.kind,target:d.target},"acted");
- },
- async "player:leave"(d){
-  if(hostConn)await request(hostConn,{t:"leave",token:d.token},"left");
-  return {ok:true};
- }
+ async "player:act"(d){return request({t:"act",token:V.session.token,kind:d.kind,target:d.target},"acted")},
+ async "player:leave"(d){if(pc)await request({t:"leave",token:d.token},"left");return {ok:true}}
 };
 
 async function emit(ev,data){
@@ -313,9 +379,9 @@ async function boot(){
  if(s&&(!urlRoom||urlRoom===s.code)){
   if(s.kind==="host"){
    const saved=store.get(roomKey(s.code));
-   if(saved&&saved.hostToken===s.token){
+   if(saved&&saved.hostToken===s.token&&saved.hostKey){
     HR=rs.restore(saved);onHostState(rs.hostView(HR));V.screen="host";render();
-    if(!await startHostPeer(HR.code,true)){V.err="Не удалось восстановить связь. Попробуйте обновить страницу или создайте новую игру.";render()}
+    if(!await startHost()){V.err="Не удалось подключиться к сети. Обновите страницу, когда появится интернет.";render()}
     return;
    }
   }else{V.screen="player";render();return playerResume()}

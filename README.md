@@ -31,11 +31,11 @@ Bepul GitHub hisobida Pages faqat **public** repolarda ishlaydi.
 
 ### Texnik tomoni
 
-- O'yin serveri yo'q. **Xona hostning brauzerida yashaydi**, o'yinchilar unga to'g'ridan-to'g'ri WebRTC (PeerJS) orqali ulanadi.
-- Bir-birini topish uchun bepul ochiq PeerJS serveri (`0.peerjs.com`) ishlatiladi. U faqat ulanishni o'rnatadi, o'yin ma'lumotlari u orqali o'tmaydi.
-- Shuning uchun **host sahifasi o'yin davomida ochiq turishi kerak**. Ekran o'chmasligi uchun Wake Lock yoqiladi. Host sahifani yangilasa, o'yin saqlanib qoladi va o'yinchilar o'zi qayta ulanadi.
-- Ba'zi mobil operatorlar tarmog'ida WebRTC ulanmasligi mumkin (TURN server yo'q). Bunday holda hamma bitta Wi-Fi'ga ulansa ishonchli ishlaydi.
-- O'z PeerJS serveringizdan foydalanish uchun sahifa skriptidan oldin `window.MAFIA_PEER = {host, port, path, secure}` ni belgilang.
+- O'yin serveri yo'q. **Xona hostning brauzerida yashaydi.** O'yinchilar unga bepul ochiq MQTT brokerlari orqali (oddiy WSS, WebRTC emas) xabar yuboradi: `broker.emqx.io`, `broker.hivemq.com`, `test.mosquitto.org`.
+- Host ulana oladigan barcha brokerlarni tinglaydi, har bir o'yinchi esa o'zida ishlaydigan birinchisidan foydalanadi. Bitta broker ishlamasa, boshqasi orqali ulanadi.
+- Barcha xabarlar shifrlangan (ECDH P-256 + AES-GCM): brokerni kuzatgan odam rollarni ko'ra olmaydi.
+- **Host sahifasi o'yin davomida ochiq turishi kerak.** Ekran o'chmasligi uchun Wake Lock yoqiladi. Host sahifani yangilasa, o'yin saqlanib qoladi va o'yinchilar o'zi qayta ulanadi.
+- Brokerlar ro'yxatini almashtirish uchun sahifa skriptidan oldin `window.MAFIA_MQTT = ["wss://..."]` ni belgilang.
 
 ## Lokal ishga tushirish
 
@@ -48,9 +48,9 @@ npm test    # o'yin mantig'i testlari
 
 | Fayl | Vazifasi |
 |---|---|
-| `index.html` | Onlayn o'yin: bosh sahifa, o'yinchi va host ekranlari, PeerJS tarmoq qismi |
+| `index.html` | Onlayn o'yin: bosh sahifa, o'yinchi va host ekranlari, MQTT tarmoq qismi |
 | `room.js` | Xona qoidalari: qo'shilish, rollar, kim nimani ko'rishi (hostda ishlaydi) |
 | `roles.js` | Rollar va tarkib |
 | `offline.html` | Asl bitta telefonli versiya |
-| `vendor/` | PeerJS 1.5.5 va qrcode-generator 1.4.4 (CDN'ga bog'liq bo'lmaslik uchun) |
+| `vendor/` | mqtt.js 5.10.4 va qrcode-generator 1.4.4 (CDN'ga bog'liq bo'lmaslik uchun) |
 | `test/` | `node --test` testlari |

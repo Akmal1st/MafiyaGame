@@ -210,8 +210,10 @@ class RoomStore {
   }
 
   // A private result (e.g. the detective's check) shown only to this player.
-  addNote(room, playerId, text) {
-    (room.notes[playerId] || (room.notes[playerId] = [])).push(String(text).slice(0, 200));
+  // note: {k: "dt" | "dn" | "blocked", r: round, n: target name, v: true/false}; each phone shows it in its own language.
+  addNote(room, playerId, note) {
+    const clean = { k: String(note.k || "").slice(0, 10), r: Number(note.r) || 0, n: String(note.n || "").slice(0, 40), v: !!note.v };
+    (room.notes[playerId] || (room.notes[playerId] = [])).push(clean);
   }
 
   // What every participant may see.

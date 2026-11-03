@@ -199,3 +199,9 @@ test("no actions after a winner is declared", () => {
   s.updateGame(room, { stage: "night", round: 1, dead: [], winner: "🏆" });
   assert.deepStrictEqual(s.actionsFor(room, one("det")), {});
 });
+
+test("notes are stored as clean structured data", () => {
+  const { s, room, one } = started(6);
+  s.addNote(room, one("det"), { k: "dt", r: 1, n: "<b>x</b>", v: 1, extra: "drop" });
+  assert.deepStrictEqual(s.secretFor(room, one("det")).notes, [{ k: "dt", r: 1, n: "<b>x</b>", v: true }]);
+});

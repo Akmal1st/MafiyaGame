@@ -4,6 +4,8 @@ Har bir o'yinchi o'z telefonidan kiradigan Mafia o'yini. Host (boshlovchi) xona 
 
 Server kerak emas: sayt GitHub Pages'da ishlaydi. Eski bitta telefonli versiya `offline.html` da saqlangan.
 
+Interfeys **o'zbekcha va ruscha**. Tepadagi UZ / RU tugmasi tilni almashtiradi, tanlov telefonda eslab qolinadi. Har bir o'yinchi o'z tilini tanlaydi: rollar, natijalar va xatolar har bir telefonda o'z tilida ko'rinadi.
+
 ## GitHub Pages'ga joylash
 
 1. Repo → **Settings → Pages**.
@@ -51,6 +53,7 @@ npm test    # o'yin mantig'i testlari
 | `index.html` | Onlayn o'yin: bosh sahifa, o'yinchi va host ekranlari, MQTT tarmoq qismi |
 | `room.js` | Xona qoidalari: qo'shilish, rollar, kim nimani ko'rishi (hostda ishlaydi) |
 | `roles.js` | Rollar va tarkib |
+| `i18n.js` | O'zbekcha va ruscha matnlar (`t(kalit)`) |
 | `offline.html` | Asl bitta telefonli versiya |
 | `vendor/` | mqtt.js 5.10.4 va qrcode-generator 1.4.4 (CDN'ga bog'liq bo'lmaslik uchun) |
 | `test/` | `node --test` testlari |

@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="ru">
+<html lang="uz">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Мафия — раздача ролей</title>
+<title>Mafiya — rollarni tarqatish</title>
 <style>
 :root{--bg:#14121c;--card:#201d2e;--tx:#f1eefb;--mut:#9a95b3;--ac:#e0314b;--ln:#322e47;color-scheme:dark;
 box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
@@ -41,12 +41,17 @@ button:disabled{opacity:.4}
 .dead span{opacity:.5;text-decoration:line-through}
 .fl{display:block;margin-top:10px;font-size:14px;color:var(--mut)}
 select{width:100%;margin-top:4px;font-size:16px;padding:10px;border-radius:10px;border:1px solid var(--ln);background:var(--bg);color:var(--tx)}
+.lang{display:flex;justify-content:flex-end;gap:6px;margin-bottom:-4px}
+.lang button{padding:5px 10px;font-size:13px;border-radius:8px;background:var(--ln);color:var(--tx)}
+.lang button.on{background:var(--ac);color:#fff}
 .lg{padding:7px 0;border-bottom:1px solid var(--ln);font-size:14px;line-height:1.35}
 </style>
 </head>
 <body>
 <div id="app"></div>
+<script src="i18n.js"></script>
 <script>
+const {t,roleName,roleDesc}=window.I18N;
 const R={
  civ:{n:"Мирный житель",e:"👤",c:"#4f8a5b",d:"Днём ищи мафию и голосуй. Особых способностей нет — твоё оружие логика."},
  mafia:{n:"Мафия",e:"🔫",c:"#b3262f",d:"Ночью вместе с командой выбираете жертву. Днём притворяйся мирным."},
@@ -81,14 +86,21 @@ const app=document.getElementById("app");
 const esc=s=>s.replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 
 function compChips(c){
- return ORDER.filter(k=>c[k]>0).map(k=>`<span class="chip">${R[k].e} ${R[k].n}: <b>${c[k]}</b></span>`).join("");
+ return ORDER.filter(k=>c[k]>0).map(k=>`<span class="chip">${R[k].e} ${roleName(k)}: <b>${c[k]}</b></span>`).join("");
 }
 
+function langBar(){
+ const d=document.createElement("div");d.className="lang";
+ d.innerHTML=I18N.LANGS.map(l=>`<button data-lang="${l}" class="${I18N.lang===l?"on":""}">${l.toUpperCase()}</button>`).join("");
+ d.querySelectorAll("button").forEach(b=>b.onclick=()=>{I18N.setLang(b.dataset.lang);render()});
+ app.prepend(d);
+}
 function render(){
- if(S.phase==="setup")return setup();
+ // pass (wheel spinning) is skipped so switching language can't interrupt a spin
+ if(S.phase==="setup"){setup();return langBar()}
  if(S.phase==="pass")return pass();
  if(S.phase==="result")return result();
- if(S.phase==="done")return done();
+ if(S.phase==="done"){done();return langBar()}
  if(S.phase==="game")return game();
 }
 
@@ -96,23 +108,23 @@ function setup(){
  const N=S.players.length,ok=N>=5;
  const c=ok?composition(N):null;
  app.innerHTML=`
- <h1>🎭 Мафия</h1><p class="sub">Добавьте игроков — роли распределятся сами</p>
+ <h1>🎭 ${t("mafia")}</h1><p class="sub">${t("off_sub")}</p>
  <div class="card">
-  <div class="row"><input id="nm" placeholder="Имя игрока" maxlength="20" autocomplete="off"><button id="add">Добавить</button></div>
+  <div class="row"><input id="nm" placeholder="${t("off_name_ph")}" maxlength="20" autocomplete="off"><button id="add">${t("add")}</button></div>
  </div>
  <div class="card">
-  <b>Игроки: ${N}</b>
-  ${N?S.players.map((p,i)=>`<div class="pl"><span>${i+1}. ${esc(p)}</span><button class="x" data-i="${i}">✕</button></div>`).join(""):`<p class="sub" style="margin:10px 0 0">Пока никого. Нужно минимум 5 человек.</p>`}
+  <b>${t("players_n",N)}</b>
+  ${N?S.players.map((p,i)=>`<div class="pl"><span>${i+1}. ${esc(p)}</span><button class="x" data-i="${i}">✕</button></div>`).join(""):`<p class="sub" style="margin:10px 0 0">${t("nobody_yet",5)}</p>`}
  </div>
- <div class="card"><b>Роли в игре</b>
-  ${ok?`<div class="chips" style="margin-top:10px">${compChips(c)}</div>`:`<p class="sub" style="margin:10px 0 0">Добавьте ещё ${5-N} игрок(а), чтобы увидеть расклад.</p>`}
+ <div class="card"><b>${t("roles_in_game")}</b>
+  ${ok?`<div class="chips" style="margin-top:10px">${compChips(c)}</div>`:`<p class="sub" style="margin:10px 0 0">${t("off_need",5-N)}</p>`}
  </div>
- <button class="big" id="go" ${ok?"":"disabled"}>Раздать роли</button>`;
+ <button class="big" id="go" ${ok?"":"disabled"}>${t("deal")}</button>`;
  const inp=document.getElementById("nm");
- const add=()=>{const v=inp.value.trim();if(!v)return;S.players.push(v);setup();document.getElementById("nm").focus()};
+ const add=()=>{const v=inp.value.trim();if(!v)return;S.players.push(v);render();document.getElementById("nm").focus()};
  document.getElementById("add").onclick=add;
  inp.onkeydown=e=>{if(e.key==="Enter")add()};
- app.querySelectorAll(".x").forEach(b=>b.onclick=()=>{S.players.splice(+b.dataset.i,1);setup()});
+ app.querySelectorAll(".x").forEach(b=>b.onclick=()=>{S.players.splice(+b.dataset.i,1);render()});
  document.getElementById("go").onclick=start;
 }
 
@@ -130,13 +142,13 @@ function pass(){
  const lbls=kinds.map((k,i)=>{const m=i*a+a/2;return `<div class="lbl" style="transform:rotate(${m}deg) translateY(-108px) rotate(${-m}deg)">${R[k].e}</div>`}).join("");
  app.innerHTML=`
  <div class="center">
-  <p class="prog">Игрок ${S.i+1} из ${N}</p>
-  <p class="sub" style="margin:0">Передайте телефон:</p>
+  <p class="prog">${t("player_of",S.i+1,N)}</p>
+  <p class="sub" style="margin:0">${t("pass_phone")}</p>
   <div class="name">${esc(S.players[S.i])}</div>
   <div class="wheelbox"><div class="ptr">▼</div>
    <div class="wheel" id="wh" style="background:conic-gradient(${grad})">${lbls}</div><div class="hub"></div></div>
-  <button class="big" id="spin">🎡 Крутить колесо</button>
-  <p class="sub" style="margin-top:12px">Остальные — не подглядывайте!</p>
+  <button class="big" id="spin">${t("spin")}</button>
+  <p class="sub" style="margin-top:12px">${t("no_peek")}</p>
  </div>`;
  document.getElementById("spin").onclick=function(){
   this.disabled=true;
@@ -153,105 +165,106 @@ function result(){
  let team="";
  if(k==="mafia"||k==="don"){
   const mates=S.players.filter((p,j)=>j!==S.i&&(S.roles[j]==="mafia"||S.roles[j]==="don")).map(esc);
-  team=mates.length?`<div class="team">Твоя команда: <b>${mates.join(", ")}</b></div>`:`<div class="team">Ты единственный в мафии.</div>`;
+  team=mates.length?`<div class="team">${t("your_team")}: <b>${mates.join(", ")}</b></div>`:`<div class="team">${t("alone_mafia")}</div>`;
  }
  app.innerHTML=`
  <div class="center">
-  <p class="prog">Игрок ${S.i+1} из ${N} · ${esc(S.players[S.i])}</p>
+  <p class="prog">${t("player_of",S.i+1,N)} · ${esc(S.players[S.i])}</p>
   <div class="card" style="border-color:${r.c};margin-top:16px;padding:24px 16px">
    <div class="role">${r.e}</div>
-   <div class="rname" style="color:${r.c}">${r.n}</div>
-   <div class="rdesc">${r.d}</div>${team}
+   <div class="rname" style="color:${r.c}">${roleName(k)}</div>
+   <div class="rdesc">${roleDesc(k)}</div>${team}
   </div>
-  <button class="big" id="nx">${S.i+1<N?"Запомнил — скрыть и передать дальше":"Запомнил — завершить"}</button>
+  <button class="big" id="nx">${t(S.i+1<N?"next_player":"finish")}</button>
  </div>`;
  document.getElementById("nx").onclick=()=>{S.i++;if(S.i<N){S.phase="pass"}else{newGame();return game()}render()};
 }
 
 function done(){
  app.innerHTML=`
- <div class="center"><h1>✅ Роли розданы</h1><p class="sub">Ведущий, начинайте игру. Первая — ночь.</p></div>
- <div class="card"><b>Состав игры</b><div class="chips" style="margin-top:10px">${compChips(composition(S.players.length))}</div></div>
- <div class="card"><b>Шпаргалка ведущего</b>
-  <p class="sub" style="text-align:left">Только для ведущего! Покажите, нажав кнопку ниже.</p>
-  <button class="sec big" id="rv">👁 Показать все роли</button>
+ <div class="center"><h1>${t("dealt")}</h1><p class="sub">${t("dealt_sub")}</p></div>
+ <div class="card"><b>${t("composition")}</b><div class="chips" style="margin-top:10px">${compChips(composition(S.players.length))}</div></div>
+ <div class="card"><b>${t("cheat")}</b>
+  <p class="sub" style="text-align:left">${t("cheat_sub")}</p>
+  <button class="sec big" id="rv">${t("show_all")}</button>
   <div id="all" class="hide"></div>
  </div>
- <button class="big" id="bg" style="margin-bottom:10px">🎮 Вернуться в игру</button>
- <button class="sec big" id="again">🔄 Перераздать роли (те же игроки)</button>
- <button class="sec big" id="back" style="margin-top:10px">✏️ Изменить список игроков</button>`;
+ <button class="big" id="bg" style="margin-bottom:10px">${t("back_game")}</button>
+ <button class="sec big" id="again">${t("redeal")}</button>
+ <button class="sec big" id="back" style="margin-top:10px">${t("edit_players")}</button>`;
  document.getElementById("rv").onclick=function(){
   const all=document.getElementById("all");
   const open=all.classList.toggle("hide")===false;
-  this.textContent=open?"🙈 Скрыть роли":"👁 Показать все роли";
-  all.innerHTML=S.players.map((p,j)=>`<div class="pl"><span>${esc(p)}</span><span>${R[S.roles[j]].e} ${R[S.roles[j]].n}</span></div>`).join("");
+  this.textContent=t(open?"hide_roles":"show_all");
+  all.innerHTML=S.players.map((p,j)=>`<div class="pl"><span>${esc(p)}</span><span>${R[S.roles[j]].e} ${roleName(S.roles[j])}</span></div>`).join("");
  };
  document.getElementById("bg").onclick=()=>{S.phase="game";render()};
  document.getElementById("again").onclick=start;
  document.getElementById("back").onclick=()=>{S.phase="setup";render()};
 }
 const isM=k=>k==="mafia"||k==="don";
+function logText(l){return typeof l==="string"?l:`${t(l[0],l[1])}: ${t(l[2],...l.slice(3))}`}
 function newGame(){S.phase="game";S.dead=S.players.map(()=>false);S.log=[];S.round=1;S.stage="night";S.votes={};S.night={};S.showRoles=false}
 function alive(){return S.players.map((p,i)=>i).filter(i=>!S.dead[i])}
 function winner(){
- const a=alive(),m=a.filter(i=>isM(S.roles[i])).length,mn=a.filter(i=>S.roles[i]==="man").length,t=a.length-m-mn;
- if(!m&&!mn)return "🏆 Победа мирных жителей!";
- if(mn&&m+t<=1)return "🔪 Победа маньяка!";
- if(!mn&&m>=t)return "🎩 Победа мафии!";
+ const a=alive(),m=a.filter(i=>isM(S.roles[i])).length,mn=a.filter(i=>S.roles[i]==="man").length,c=a.length-m-mn;
+ if(!m&&!mn)return t("win_civ");
+ if(mn&&m+c<=1)return t("win_man");
+ if(!mn&&m>=c)return t("win_maf");
  return "";
 }
-function opts(sel){return `<option value="">— никого —</option>`+alive().map(i=>`<option value="${i}" ${String(i)===String(sel)?"selected":""}>${esc(S.players[i])}</option>`).join("")}
+function opts(sel){return `<option value="">${t("nobody")}</option>`+alive().map(i=>`<option value="${i}" ${String(i)===String(sel)?"selected":""}>${esc(S.players[i])}</option>`).join("")}
 function game(){
  S.phase="game";
- const y=scrollY,a=alive(),w=winner(),night=S.stage==="night",has=k=>S.roles.includes(k),pre=(night?"Ночь ":"День ")+S.round+": ";
- let h=`<h1>${night?"🌙 Ночь":"☀️ День"} ${S.round}</h1><p class="sub">Живых: ${a.length} из ${S.players.length}</p>`;
+ const y=scrollY,a=alive(),w=winner(),night=S.stage==="night",has=k=>S.roles.includes(k),pre=[night?"lg_night":"lg_day",S.round];
+ let h=`<h1>${t(night?"night_n":"day_n",S.round)}</h1><p class="sub">${t("alive_n",a.length,S.players.length)}</p>`;
  if(w)h+=`<div class="card center" style="border-color:var(--ac)"><b style="font-size:20px">${w}</b></div>`;
- h+=`<div class="card"><div class="row" style="justify-content:space-between;align-items:center"><b>Игроки</b><button class="sec" id="tr" style="padding:6px 10px;font-size:14px">${S.showRoles?"🙈 Скрыть роли":"👁 Показать роли"}</button></div>`
- +S.players.map((p,i)=>`<div class="pl ${S.dead[i]?"dead":""}"><span>${S.dead[i]?"💀":"🙂"} ${esc(p)}${S.showRoles?` · ${R[S.roles[i]].e} ${R[S.roles[i]].n}`:""}</span><button class="x tg" data-i="${i}" style="font-size:14px">${S.dead[i]?"вернуть":"выбыл"}</button></div>`).join("")+`</div>`;
+ h+=`<div class="card"><div class="row" style="justify-content:space-between;align-items:center"><b>${t("players")}</b><button class="sec" id="tr" style="padding:6px 10px;font-size:14px">${t(S.showRoles?"hide_roles":"show_roles")}</button></div>`
+ +S.players.map((p,i)=>`<div class="pl ${S.dead[i]?"dead":""}"><span>${S.dead[i]?"💀":"🙂"} ${esc(p)}${S.showRoles?` · ${R[S.roles[i]].e} ${roleName(S.roles[i])}`:""}</span><button class="x tg" data-i="${i}" style="font-size:14px">${t(S.dead[i]?"revive":"out")}</button></div>`).join("")+`</div>`;
  if(night){
   const f=(k,l,s)=>s?`<label class="fl">${l}<select data-k="${k}">${opts(S.night[k]??"")}</select></label>`:"";
-  h+=`<div class="card"><b>Действия ночи</b>`+f("mk","🔫 Кого убила мафия",1)+f("mn","🔪 Кого убил маньяк",has("man"))+f("dc","💉 Кого лечил доктор / медсестра",has("doc"))+f("ms","💋 Кого отвлекла любовница",has("mis"))+f("dt","🕵️ Кого проверил детектив",has("det"))+`<button class="big" id="en" style="margin-top:14px">☀️ Подвести итоги ночи</button></div>`;
+  h+=`<div class="card"><b>${t("night_actions")}</b>`+f("mk",t("f_mk"),1)+f("mn",t("f_mn"),has("man"))+f("dc",t("f_dc"),has("doc"))+f("ms",t("f_ms"),has("mis"))+f("dt",t("f_dt"),has("det"))+`<button class="big" id="en" style="margin-top:14px">${t("end_night")}</button></div>`;
  }else{
-  h+=`<div class="card"><b>Голосование</b>`+a.map(i=>`<div class="pl"><span>${esc(S.players[i])}</span><span><button class="sec vb" data-i="${i}" data-d="-1" style="padding:4px 14px">−</button> <b style="display:inline-block;min-width:28px;text-align:center">${S.votes[i]||0}</b> <button class="vb" data-i="${i}" data-d="1" style="padding:4px 14px">+</button></span></div>`).join("")+`<button class="big" id="ev" style="margin-top:14px">⚖️ Подвести голосование</button><button class="sec big" id="sk" style="margin-top:8px">Без изгнания</button></div>`;
+  h+=`<div class="card"><b>${t("voting")}</b>`+a.map(i=>`<div class="pl"><span>${esc(S.players[i])}</span><span><button class="sec vb" data-i="${i}" data-d="-1" style="padding:4px 14px">−</button> <b style="display:inline-block;min-width:28px;text-align:center">${S.votes[i]||0}</b> <button class="vb" data-i="${i}" data-d="1" style="padding:4px 14px">+</button></span></div>`).join("")+`<button class="big" id="ev" style="margin-top:14px">${t("end_vote")}</button><button class="sec big" id="sk" style="margin-top:8px">${t("no_exile")}</button></div>`;
  }
- h+=`<div class="card"><b>📜 Журнал</b>`+(S.log.length?S.log.slice().reverse().map(l=>`<div class="lg">${l}</div>`).join(""):`<p class="sub" style="margin:8px 0 0;text-align:left">Пока пусто.</p>`)+`</div><button class="sec big" id="mn">📋 Меню ведущего</button>`;
- app.innerHTML=h;scrollTo(0,y);
+ h+=`<div class="card"><b>${t("log")}</b>`+(S.log.length?S.log.slice().reverse().map(l=>`<div class="lg">${logText(l)}</div>`).join(""):`<p class="sub" style="margin:8px 0 0;text-align:left">${t("empty")}</p>`)+`</div><button class="sec big" id="mn">${t("host_menu_btn")}</button>`;
+ app.innerHTML=h;langBar();scrollTo(0,y);
  document.getElementById("tr").onclick=()=>{S.showRoles=!S.showRoles;game()};
  document.getElementById("mn").onclick=()=>{S.phase="done";render()};
  app.querySelectorAll("select").forEach(s=>s.onchange=()=>{S.night[s.dataset.k]=s.value});
- app.querySelectorAll(".tg").forEach(b=>b.onclick=()=>{const i=+b.dataset.i;S.dead[i]=!S.dead[i];S.log.push(pre+`ведущий вручную: <b>${esc(S.players[i])}</b> ${S.dead[i]?"выбыл":"возвращён в игру"}`);game()});
+ app.querySelectorAll(".tg").forEach(b=>b.onclick=()=>{const i=+b.dataset.i;S.dead[i]=!S.dead[i];S.log.push([...pre,"lg_manual",esc(S.players[i]),!!S.dead[i]]);game()});
  app.querySelectorAll(".vb").forEach(b=>b.onclick=()=>{const i=+b.dataset.i;S.votes[i]=Math.max(0,(S.votes[i]||0)+ +b.dataset.d);game()});
  const en=document.getElementById("en");if(en)en.onclick=endNight;
  const ev=document.getElementById("ev");if(ev)ev.onclick=()=>endVote(false);
  const sk=document.getElementById("sk");if(sk)sk.onclick=()=>endVote(true);
 }
 function endNight(){
- const n=S.night,a=alive(),nm=i=>`<b>${esc(S.players[i])}</b>`,L=x=>S.log.push(`Ночь ${S.round}: ${x}`);
+ const n=S.night,a=alive(),nm=i=>esc(S.players[i]),L=(k,...x)=>S.log.push(["lg_night",S.round,k,...x]);
  const g=k=>n[k]===undefined||n[k]===""?null:+n[k];
  const mk=g("mk"),mn=g("mn"),dc=g("dc"),ms=g("ms"),dt=g("dt"),bl=ms!==null?S.roles[ms]:null;
- if(ms!==null)L(`любовница отвлекла ${nm(ms)}`);
+ if(ms!==null)L("lg_blocked",nm(ms));
  let saved=null;
  if(dc!==null){
   const healer=a.some(i=>(S.roles[i]==="doc"||S.roles[i]==="nurse")&&i!==ms);
-  if(healer){saved=dc;L(`лечили ${nm(dc)}`)}else L(`лечение ${nm(dc)} сорвано`);
+  if(healer){saved=dc;L("lg_healed",nm(dc))}else L("lg_heal_fail",nm(dc));
  }
- if(dt!==null){if(bl==="det")L("проверка детектива сорвана");else L(`детектив проверил ${nm(dt)}: ${isM(S.roles[dt])?"мафия":"не мафия"}`)}
+ if(dt!==null){if(bl==="det")L("lg_det_fail");else L("lg_det",nm(dt),isM(S.roles[dt]))}
  let any=false;
- [[mk,"мафия"],[mn,"маньяк"]].forEach(([t,by])=>{
-  if(t===null)return;
-  if(by==="маньяк"&&bl==="man"){L("маньяк был отвлечён — убийство не состоялось");return}
-  if(t===saved){L(`${by} стрелял в ${nm(t)} — <b>спасён!</b>`);return}
-  if(!S.dead[t]){S.dead[t]=true;any=true;L(`${by} убил ${nm(t)} 💀`)}
+ [[mk,"maf"],[mn,"man"]].forEach(([tg,by])=>{
+  if(tg===null)return;
+  if(by==="man"&&bl==="man"){L("lg_man_blocked");return}
+  if(tg===saved){L("lg_saved",by,nm(tg));return}
+  if(!S.dead[tg]){S.dead[tg]=true;any=true;L("lg_killed",by,nm(tg))}
  });
- if(!any)L("этой ночью никто не погиб");
+ if(!any)L("lg_nobody_died");
  S.stage="day";S.votes={};S.night={};game();
 }
 function endVote(skip){
  const a=alive();let max=0;a.forEach(i=>max=Math.max(max,S.votes[i]||0));
- const top=a.filter(i=>(S.votes[i]||0)===max),D=x=>S.log.push(`День ${S.round}: ${x}`);
- if(skip||max===0)D("никто не изгнан");
- else if(top.length>1)D(`ничья (${top.map(i=>esc(S.players[i])).join(", ")}) — по ${max} гол., никто не изгнан`);
- else{S.dead[top[0]]=true;D(`изгнан <b>${esc(S.players[top[0]])}</b> (${max} гол.) 💀`)}
+ const top=a.filter(i=>(S.votes[i]||0)===max),D=(k,...x)=>S.log.push(["lg_day",S.round,k,...x]);
+ if(skip||max===0)D("lg_no_exile");
+ else if(top.length>1)D("lg_tie",top.map(i=>esc(S.players[i])).join(", "),max);
+ else{S.dead[top[0]]=true;D("lg_exiled",esc(S.players[top[0]]),max)}
  S.round++;S.stage="night";S.votes={};game();
 }
 render();

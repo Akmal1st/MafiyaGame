@@ -35,7 +35,19 @@ Bepul GitHub hisobida Pages faqat **public** repolarda ishlaydi.
    - doktor ko'p ovoz olgan odamni himoya qiladi, o'zini bir marta davolashi mumkin;
    - kunduzi botlar aniq yetakchiga qo'shiladi, mafiya botlari esa ko'pchilikka qo'shilib o'zini yashiradi;
    - botlar odamga o'xshab bir necha soniya o'ylab yuradi.
-7. Sahifa yangilansa, o'yinchi ham, host ham avtomatik qaytadi (`localStorage`).
+7. **Taymer.** Host kunduzi muhokama (1/2/3 daqiqa) yoki nutq (30/60 soniya), kechasi 30/60 soniya taymer qo'yadi. Taymer hamma telefonlarda ko'rinadi, oxirgi 10 soniyada va tugaganda signal chaladi.
+8. **Ovozli boshlovchi.** Host telefoni «Shahar uxlaydi», «Shahar uyg'onadi, bu kecha o'ldirildi: …» kabi gaplarni ovoz chiqarib aytadi. Telefonda o'zbekcha ovoz bo'lmasa, ruscha gapiradi. Ovoz va signallarni o'chirish mumkin.
+9. **Rol sozlamalari.** Lobbida «O'zim tanlayman» bilan har bir rol sonini − / + bilan belgilash mumkin. Mafiya o'yinchilarning yarmidan kam va kamida bitta tinch aholi bo'lishi kerak.
+10. **O'lganning roli.** «O'lganning roli hammaga ko'rsatilsin» yoqilsa, chiqqan o'yinchining roli hamma telefonda ko'rinadi. O'yin tugaganda hamma rollar ochiladi.
+11. **Yangi rollar** (tinch aholi tomonida):
+    - 🎯 snayper — butun o'yinda bir marta kechasi otadi (13+ o'yinchida avtomatik);
+    - 🍀 omadli — birinchi kechagi suiqasddan omon qoladi (15+);
+    - ⚖️ sudya — bir marta kunduzgi ovozda bir odamni oqlaydi (17+).
+12. **Chiqqanlar chati.** O'yindan chiqqanlar o'zaro yozishadi, tiriklar buni ko'rmaydi. O'yin tugaganda hamma yozishi mumkin.
+13. **Statistika.** Har bir telefonda o'z o'yinlari va g'alabalari, hostda esa o'tkazilgan o'yinlar va eng ko'p g'olib bo'lganlar saqlanadi (bosh sahifadagi «📊 Statistika»).
+14. **Telefonga o'rnatish (PWA).** Bosh sahifadagi «📲 Telefonga o'rnatish» (iPhone'da Safari → «Bosh ekranga qo'shish»). Ilova ikonkasi paydo bo'ladi, oflayn rejim internetsiz ham ochiladi.
+15. **Avtomatik boshlovchi.** Lobbida yoqiladi: kecha va kun vaqti tanlanadi, hamma tanlov qilganda yoki vaqt tugaganda o'yin o'zi keyingi bosqichga o'tadi. «Men ham o'ynayman» ga ism yozilsa, host ham rol oladi va boshqa rollarni ko'rmaydi.
+16. Sahifa yangilansa, o'yinchi ham, host ham avtomatik qaytadi (`localStorage`).
 
 ### Texnik tomoni
 
@@ -56,7 +68,10 @@ npm test    # o'yin mantig'i testlari
 
 | Fayl | Vazifasi |
 |---|---|
-| `index.html` | Onlayn o'yin: bosh sahifa, o'yinchi va host ekranlari, MQTT tarmoq qismi |
+| `index.html` | Onlayn o'yin sahifasi (dizayn) |
+| `app.js` | Ekranlar: bosh sahifa, o'yinchi, host, sozlamalar, statistika |
+| `net.js` | MQTT tarmoq qismi, host buyruqlari, botlar, avtomatik boshlovchi, taymer, ovoz, statistika |
+| `sw.js`, `manifest.webmanifest`, `icons/` | Telefonga o'rnatish (PWA) va oflayn kesh |
 | `room.js` | Xona qoidalari: qo'shilish, rollar, kim nimani ko'rishi (hostda ishlaydi) |
 | `roles.js` | Rollar va tarkib |
 | `bots.js` | Botlar «miyasi»: rolga qarab tanlov va ovoz |

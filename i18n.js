@@ -1,5 +1,7 @@
 // Interface texts in Uzbek (uz) and Russian (ru). t(key, ...args) returns the text in the current language.
 (function (root) {
+  const UZBY = { maf: "mafiya", man: "manyak", sn: "snayper" };
+  const RUBY = { maf: "мафия", man: "маньяк", sn: "снайпер" };
   const D = {
     uz: {
       title: "Mafiya onlayn",
@@ -123,8 +125,11 @@
       lg_don_fail: "don tekshiruvi amalga oshmadi",
       lg_don: (who, det) => `don <b>${who}</b>ni tekshirdi: ${det ? "detektiv" : "detektiv emas"}`,
       lg_man_blocked: "manyak chalg'itildi — qotillik bo'lmadi",
-      lg_saved: (by, who) => `${by === "maf" ? "mafiya" : "manyak"} <b>${who}</b>ga o'q uzdi — <b>qutqarildi!</b>`,
-      lg_killed: (by, who) => `${by === "maf" ? "mafiya" : "manyak"} <b>${who}</b>ni o'ldirdi 💀`,
+      lg_saved: (by, who) => `${UZBY[by]} <b>${who}</b>ga o'q uzdi — <b>qutqarildi!</b>`,
+      lg_killed: (by, who) => `${UZBY[by]} <b>${who}</b>ni o'ldirdi 💀`,
+      lg_lucky: (by, who) => `${UZBY[by]} <b>${who}</b>ga o'q uzdi — omadli omon qoldi 🍀`,
+      lg_sn_blocked: "snayper chalg'itildi — o'q uzilmadi",
+      lg_pardoned: (who, n) => `<b>${who}</b> ko'pchilik ovozini oldi (${n}), lekin sudya oqladi ⚖️`,
       lg_nobody_died: "bu kecha hech kim o'lmadi",
       lg_no_exile: "hech kim chiqarilmadi",
       lg_tie: (names, n) => `durang (${names}) — ${n} tadan ovoz, hech kim chiqarilmadi`,
@@ -153,6 +158,56 @@
       err_few: m => `Kamida ${m} o'yinchi kerak`,
       err_no_action: "Hozir bu harakat mavjud emas",
       err_bad_target: "Bu o'yinchini tanlab bo'lmaydi",
+      act_sn: ["🎯 Bitta o'q: kimni otasiz?", "Butun o'yinda faqat bir marta. Otmasangiz, tanlamang."],
+      act_jd: ["⚖️ Kimni oqlaysiz?", "Butun o'yinda bir marta: shu odam ko'pchilik ovozini olsa ham chiqmaydi."],
+      f_sn: "🎯 Snayper kimni otdi",
+      judge_pick: who => `Sudya <b>${who}</b>ni oqlashni tanladi`,
+      err_need_mafia: "Kamida bitta mafiya bo'lishi kerak",
+      err_too_many_roles: "Rollar o'yinchilardan ko'p — kamida bitta tinch aholi qolishi kerak",
+      err_too_many_mafia: "Mafiya juda ko'p — ular o'yinchilarning yarmidan kam bo'lishi kerak",
+      err_no_chat: "Chat faqat o'yindan chiqqanlar uchun",
+      news_died: names => `Bu kecha o'ldirildi: ${names}`,
+      news_nobody: "Bu kecha hech kim o'lmadi",
+      news_out: who => `Ovoz natijasida chiqarildi: ${who}`,
+      news_pardoned: who => `${who} ko'pchilik ovozini oldi, lekin sudya oqladi`,
+      news_tie: "Ovozlar teng — hech kim chiqarilmadi",
+      news_no_exile: "Kecha hech kim chiqarilmadi",
+      tm_disc: "Muhokama", tm_speech: "Nutq", tm_night: "Tun", tm_day: "Kun",
+      timer: "⏱ Taymer",
+      tb_disc: m => `Muhokama ${m} daq`, tb_speech: s => `Nutq ${s} s`, tb_night: s => `Tun ${s} s`, tb_stop: "To'xtatish",
+      voice: "Ovozli boshlovchi", sound: "Ovoz signallari", voice_on: "Ovozli boshlovchi yoqildi",
+      nar_night: "Shahar uxlaydi. Kim harakat qilsa — telefoningizni oching.",
+      nar_morning_died: names => `Shahar uyg'onadi. Bu kecha o'ldirildi: ${names}.`,
+      nar_morning_none: "Shahar uyg'onadi. Bu kecha hech kim o'lmadi.",
+      nar_exiled: who => `Shahar qaror qildi: ${who} chiqarildi.`,
+      nar_no_exile: "Bugun hech kim chiqarilmadi.",
+      nar_pardoned: who => `Sudya ${who}ni oqladi.`,
+      chat_title: "👻 Chiqqanlar chati",
+      chat_sub: "Buni faqat o'yindan chiqqanlar ko'radi. Tiriklarga maslahat bermang!",
+      chat_ph: "Xabar…",
+      set_title: "⚙️ O'yin sozlamalari",
+      set_auto: "Avtomatik rollar", set_custom: "O'zim tanlayman",
+      set_auto_sub: "Rollar o'yinchilar soniga qarab o'zi tanlanadi.",
+      set_reveal: "O'lganning roli hammaga ko'rsatilsin",
+      set_autohost: "🤖 Avtomatik boshlovchi",
+      set_autohost_sub: "O'yin o'zi yuradi: hamma tanlov qilganda yoki vaqt tugaganda keyingi bosqich boshlanadi.",
+      set_night_t: "Tun vaqti", set_day_t: "Kun vaqti",
+      set_iplay: "🙋 Men ham o'ynayman",
+      set_iplay_sub: "Ismingizni yozing: siz ham rol olasiz va boshqa rollarni ko'rmaysiz.",
+      auto_title: "🤖 Avtomatik boshlovchi",
+      auto_sub: "O'yin o'zi yuradi. Bu telefonni yopmang.",
+      auto_skip: "⏭ Bosqichni hozir yakunlash",
+      auto_skip_q: "Bosqichni hozir yakunlaymi?",
+      auto_on: "avtomatik",
+      stats_btn: "📊 Statistika",
+      stats_sub: "Faqat shu telefonda saqlanadi",
+      stats_mine: "Mening o'yinlarim", stats_hosted: "Men boshlagan o'yinlar",
+      st_games: "O'yinlar", st_wins: "G'alabalar", st_top: "Eng ko'p g'olib bo'lganlar",
+      st_row: (w, g, p) => `${w} g'alaba / ${g} o'yin (${p})`,
+      st_recent: "Oxirgi o'yinlar", st_players: "o'yinchi",
+      st_clear: "Statistikani tozalash", st_clear_q: "Statistika butunlay o'chirilsinmi?",
+      install: "📲 Telefonga o'rnatish",
+      install_ios: "Safari'da «Ulashish» → «Bosh ekranga qo'shish» ni bosing.",
       // offline (one phone) mode
       off_sub: "O'yinchilarni qo'shing — rollar o'zi taqsimlanadi",
       off_name_ph: "O'yinchi ismi",
@@ -184,7 +239,10 @@
         doc: ["Doktor", "Har kecha bitta o'yinchini davolab, o'limdan qutqarasiz. O'zingizni faqat bir marta davolay olasiz."],
         nurse: ["Hamshira", "Doktorning yordamchisi. Doktor o'ldirilsa, uning o'rniga davolaysiz."],
         man: ["Manyak", "O'zingiz uchun o'ynaysiz. Har kecha bittasini o'ldirasiz. G'alaba — oxirigacha yolg'iz qolish."],
-        mis: ["Ma'shuqa", "Har kecha bir o'yinchini tanlaysiz: u o'sha kechagi harakatini bajara olmaydi. Bir odamni ketma-ket ikki marta tanlab bo'lmaydi."]
+        mis: ["Ma'shuqa", "Har kecha bir o'yinchini tanlaysiz: u o'sha kechagi harakatini bajara olmaydi. Bir odamni ketma-ket ikki marta tanlab bo'lmaydi."],
+        sn: ["Snayper", "Tinch aholi tomonida. Butun o'yinda bir marta kechasi bitta o'yinchini otishingiz mumkin. Ehtiyot bo'ling — begunohni otib qo'ymang."],
+        jd: ["Sudya", "Tinch aholi tomonida. Butun o'yinda bir marta kunduzgi ovozda bitta odamni oqlab, chiqib ketishdan saqlab qolasiz."],
+        lk: ["Omadli", "Tinch aholi tomonida. Kechasi sizni birinchi marta o'ldirishmoqchi bo'lishsa, omon qolasiz."]
       }
     },
     ru: {
@@ -308,8 +366,11 @@
       lg_don_fail: "проверка дона сорвана",
       lg_don: (who, det) => `дон проверил <b>${who}</b>: ${det ? "детектив" : "не детектив"}`,
       lg_man_blocked: "маньяк был отвлечён — убийство не состоялось",
-      lg_saved: (by, who) => `${by === "maf" ? "мафия стреляла" : "маньяк стрелял"} в <b>${who}</b> — <b>спасён!</b>`,
-      lg_killed: (by, who) => `${by === "maf" ? "мафия убила" : "маньяк убил"} <b>${who}</b> 💀`,
+      lg_saved: (by, who) => `${RUBY[by]} стрелял(а) в <b>${who}</b> — <b>спасён!</b>`,
+      lg_killed: (by, who) => `${RUBY[by]} убил(а) <b>${who}</b> 💀`,
+      lg_lucky: (by, who) => `${RUBY[by]} стрелял(а) в <b>${who}</b> — счастливчик выжил 🍀`,
+      lg_sn_blocked: "снайпер был отвлечён — выстрела не было",
+      lg_pardoned: (who, n) => `больше всех голосов (${n}) у <b>${who}</b>, но судья помиловал ⚖️`,
       lg_nobody_died: "этой ночью никто не погиб",
       lg_no_exile: "никто не изгнан",
       lg_tie: (names, n) => `ничья (${names}) — по ${n} гол., никто не изгнан`,
@@ -336,6 +397,56 @@
       err_few: m => `Нужно минимум ${m} игроков`,
       err_no_action: "Сейчас это действие недоступно",
       err_bad_target: "Этого игрока выбрать нельзя",
+      act_sn: ["🎯 Один выстрел: в кого стреляете?", "Только раз за игру. Если не хотите стрелять — не выбирайте."],
+      act_jd: ["⚖️ Кого помиловать?", "Раз за игру: этот игрок не уйдёт, даже если наберёт больше всех голосов."],
+      f_sn: "🎯 В кого стрелял снайпер",
+      judge_pick: who => `Судья выбрал помиловать <b>${who}</b>`,
+      err_need_mafia: "Нужна хотя бы одна мафия",
+      err_too_many_roles: "Ролей больше, чем игроков — нужен хотя бы один мирный",
+      err_too_many_mafia: "Слишком много мафии — её должно быть меньше половины",
+      err_no_chat: "Чат только для выбывших",
+      news_died: names => `Этой ночью убиты: ${names}`,
+      news_nobody: "Этой ночью никто не погиб",
+      news_out: who => `По итогам голосования изгнан: ${who}`,
+      news_pardoned: who => `${who} набрал больше всех голосов, но судья помиловал`,
+      news_tie: "Ничья — никто не изгнан",
+      news_no_exile: "Вчера никого не изгнали",
+      tm_disc: "Обсуждение", tm_speech: "Речь", tm_night: "Ночь", tm_day: "День",
+      timer: "⏱ Таймер",
+      tb_disc: m => `Обсуждение ${m} мин`, tb_speech: s => `Речь ${s} с`, tb_night: s => `Ночь ${s} с`, tb_stop: "Стоп",
+      voice: "Голос ведущего", sound: "Звуки", voice_on: "Голос ведущего включён",
+      nar_night: "Город засыпает. Кто ходит ночью — откройте телефон.",
+      nar_morning_died: names => `Город просыпается. Этой ночью убиты: ${names}.`,
+      nar_morning_none: "Город просыпается. Этой ночью никто не погиб.",
+      nar_exiled: who => `Город решил: ${who} покидает игру.`,
+      nar_no_exile: "Сегодня никого не изгнали.",
+      nar_pardoned: who => `Судья помиловал игрока ${who}.`,
+      chat_title: "👻 Чат выбывших",
+      chat_sub: "Его видят только выбывшие. Не подсказывайте живым!",
+      chat_ph: "Сообщение…",
+      set_title: "⚙️ Настройки игры",
+      set_auto: "Роли автоматически", set_custom: "Выбрать самому",
+      set_auto_sub: "Роли подбираются по числу игроков.",
+      set_reveal: "Показывать роль выбывшего всем",
+      set_autohost: "🤖 Автоматический ведущий",
+      set_autohost_sub: "Игра идёт сама: следующая фаза начинается, когда все сделали ход или вышло время.",
+      set_night_t: "Время ночи", set_day_t: "Время дня",
+      set_iplay: "🙋 Я тоже играю",
+      set_iplay_sub: "Введите имя: вы получите роль и не будете видеть чужие роли.",
+      auto_title: "🤖 Автоматический ведущий",
+      auto_sub: "Игра идёт сама. Не закрывайте этот телефон.",
+      auto_skip: "⏭ Завершить фазу сейчас",
+      auto_skip_q: "Завершить фазу сейчас?",
+      auto_on: "авто",
+      stats_btn: "📊 Статистика",
+      stats_sub: "Хранится только на этом телефоне",
+      stats_mine: "Мои игры", stats_hosted: "Игры, которые я вёл",
+      st_games: "Игр", st_wins: "Побед", st_top: "Чаще всех побеждали",
+      st_row: (w, g, p) => `${w} побед / ${g} игр (${p})`,
+      st_recent: "Последние игры", st_players: "игроков",
+      st_clear: "Очистить статистику", st_clear_q: "Удалить всю статистику?",
+      install: "📲 Установить на телефон",
+      install_ios: "В Safari нажмите «Поделиться» → «На экран „Домой“».",
       off_sub: "Добавьте игроков — роли распределятся сами",
       off_name_ph: "Имя игрока",
       add: "Добавить",
@@ -366,7 +477,10 @@
         doc: ["Доктор", "Каждую ночь лечишь одного игрока — спасаешь от убийства. Себя можно лечить лишь один раз."],
         nurse: ["Медсестра", "Помощница доктора. Если доктора убили — ты берёшь его роль и лечишь вместо него."],
         man: ["Маньяк", "Играешь сам за себя. Каждую ночь убиваешь одного. Победа — остаться последним."],
-        mis: ["Любовница", "Каждую ночь выбираешь игрока: он пропускает своё ночное действие. Не выбирай одного дважды подряд."]
+        mis: ["Любовница", "Каждую ночь выбираешь игрока: он пропускает своё ночное действие. Не выбирай одного дважды подряд."],
+        sn: ["Снайпер", "Играешь за мирных. Один раз за игру ночью можешь застрелить игрока. Осторожно — не попади в мирного."],
+        jd: ["Судья", "Играешь за мирных. Один раз за игру можешь помиловать игрока на дневном голосовании — он не уйдёт."],
+        lk: ["Везунчик", "Играешь за мирных. Первое ночное покушение на тебя не сработает — ты выживешь."]
       }
     }
   };
@@ -376,10 +490,11 @@
   try { lang = localStorage.getItem(LANG_KEY); } catch {}
   if (!D[lang]) lang = /^ru/i.test(navigator.language || "") ? "ru" : "uz";
 
-  function t(key, ...args) {
-    const v = D[lang][key] !== undefined ? D[lang][key] : D.ru[key];
+  function tIn(l, key, ...args) {
+    const v = D[l] && D[l][key] !== undefined ? D[l][key] : D.ru[key];
     return typeof v === "function" ? v(...args) : v === undefined ? key : v;
   }
+  const t = (key, ...args) => tIn(lang, key, ...args);
   const roleName = k => (D[lang].roles[k] || [k])[0];
   const roleDesc = k => (D[lang].roles[k] || ["", ""])[1];
   // Error from a room rule: translate by code, fall back to the message.
@@ -394,7 +509,7 @@
     document.documentElement.lang = l;
     document.title = t("title");
   }
-  document.documentElement.lang = lang;
+  if (typeof document !== "undefined") document.documentElement.lang = lang;
 
-  root.I18N = { t, roleName, roleDesc, errText, setLang, get lang() { return lang; }, LANGS: ["uz", "ru"] };
+  root.I18N = { t, tIn, D, roleName, roleDesc, errText, setLang, get lang() { return lang; }, LANGS: ["uz", "ru"] };
 })(window);

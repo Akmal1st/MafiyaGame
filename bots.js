@@ -75,6 +75,20 @@
       const others = options.filter(id => id !== botId);
       return others.length ? preferred(others, rnd() < 0.5 ? [accused] : [], rnd) : pickRandom(options, rnd);
     }
+    if (kind === "sn") {
+      // One bullet per game: wait a night, then shoot someone the town suspected yesterday.
+      if (room.game.round < 2 || rnd() > 0.35) return null;
+      const votes = {};
+      Object.values(room.lastVotes || {}).forEach(t => { votes[t] = (votes[t] || 0) + 1; });
+      const suspects = Object.keys(votes).map(Number).filter(id => votes[id] >= 2);
+      return suspects.some(id => options.includes(id)) ? preferred(options, [suspects], rnd) : null;
+    }
+    if (kind === "jd") {
+      // Pardon yourself if you are about to be exiled.
+      const tally = currentTally(room);
+      const top = Object.keys(tally).map(Number).sort((a, b) => tally[b] - tally[a])[0];
+      return top === botId && options.includes(botId) ? botId : null;
+    }
     if (kind === "mn") return preferred(options, [accusersOf(room, [botId])], rnd);
     if (kind === "ms") return pickRandom(options, rnd);
 

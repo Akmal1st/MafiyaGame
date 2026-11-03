@@ -1,6 +1,6 @@
 // Room state and rules. Runs in the host's browser (window.MafiaRoom) and in Node for tests.
 (function (root) {
-const { deal, isMafia, MIN_PLAYERS } = typeof module !== "undefined" && module.exports ? require("./roles.js") : root.MafiaRoles;
+const { deal, isMafia, MIN_PLAYERS, composition, customComposition } = typeof module !== "undefined" && module.exports ? require("./roles.js") : root.MafiaRoles;
 const randomBytes = n => globalThis.crypto.getRandomValues(new Uint8Array(n));
 
 const CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // no 0/O, 1/I
@@ -43,7 +43,20 @@ function clearPlay(room) {
   room.selfHealUsed = {}; // healer id -> true once they healed themselves
   room.lastBlock = null;  // last night's mistress target (can't repeat)
   room.lastVotes = {};    // voterId -> targetId from the previous day (bots use it as a clue)
+  room.used = { sniper: false, judge: false, lucky: false }; // one-time abilities
+  room.log = [];          // host-only history: [stageKey, round, textKey, ...args]
+  room.chat = [];         // chat of players who are out: {id, name, text}
 }
+
+const DEFAULT_SETTINGS = () => ({
+  mode: "auto",           // "auto": roles by player count; "custom": host's counts
+  counts: { mafia: 2, don: 0, det: 1, ast: 0, doc: 1, nurse: 0, man: 0, mis: 0, sn: 0, jd: 0, lk: 0 },
+  reveal: false,          // show the role of players who are out
+  auto: false,            // automatic host: phases end by themselves; the host plays too
+  timers: { night: 60, day: 120 } // seconds per phase in automatic mode
+});
+const OPTIONAL = ["sn", "jd"];
+const KILLERS = { mk: "maf", mn: "man", sn: "sn" };
 
 class RoomStore {
   constructor({ now = () => Date.now(), rnd } = {}) {
@@ -64,8 +77,11 @@ class RoomStore {
       players: [], // {id, token, name, connected}
       started: false,
       roles: {}, // playerId -> role key
-      game: { stage: "lobby", round: 0, dead: {}, winner: "" },
+      game: { stage: "lobby", round: 0, dead: {}, winner: "", news: null, timer: null },
+      settings: DEFAULT_SETTINGS(),
+      hostPlayerId: null,
       picks: {}, notes: {}, selfHealUsed: {}, lastBlock: null, lastVotes: {},
+      used: { sniper: false, judge: false, lucky: false }, log: [], chat: [],
       nextId: 1,
       touched: this.now()
     };
@@ -122,23 +138,216 @@ class RoomStore {
     return room.players.splice(i, 1)[0];
   }
 
+  // ----- settings (lobby) -----
+
+  setSettings(room, s) {
+    if (room.started) throw new GameError("started", "Игра уже началась");
+    if (!s || typeof s !== "object") return;
+    const cur = room.settings;
+    if (s.mode === "auto" || s.mode === "custom") cur.mode = s.mode;
+    if (s.counts && typeof s.counts === "object")
+      Object.keys(cur.counts).forEach(k => { if (s.counts[k] !== undefined) cur.counts[k] = Math.max(0, Math.min(MAX_PLAYERS, Math.floor(Number(s.counts[k]) || 0))); });
+    if (s.reveal !== undefined) cur.reveal = !!s.reveal;
+    if (s.auto !== undefined) cur.auto = !!s.auto;
+    if (s.timers && typeof s.timers === "object") {
+      const clamp = (v, lo, hi, d) => { v = Math.floor(Number(v)); return Number.isFinite(v) ? Math.max(lo, Math.min(hi, v)) : d; };
+      cur.timers.night = clamp(s.timers.night, 15, 600, cur.timers.night);
+      cur.timers.day = clamp(s.timers.day, 30, 1200, cur.timers.day);
+    }
+  }
+
+  // Roles for the current number of players: {comp} or {error}.
+  compositionFor(room) {
+    const N = room.players.length;
+    if (N < MIN_PLAYERS) return { error: "few" };
+    return room.settings.mode === "custom" ? customComposition(N, room.settings.counts) : { comp: composition(N) };
+  }
+
+  // The host joins the game as a player (automatic host mode) or leaves it (name null).
+  setHostPlayer(room, rawName) {
+    if (room.started) throw new GameError("started", "Игра уже началась");
+    if (rawName === null || rawName === undefined) {
+      if (room.hostPlayerId !== null) this.remove(room, room.hostPlayerId);
+      room.hostPlayerId = null;
+      return null;
+    }
+    const name = cleanName(rawName);
+    if (!name) throw new GameError("bad_name", "Введите имя");
+    const existing = room.players.find(p => p.id === room.hostPlayerId);
+    if (room.players.some(p => p !== existing && p.name.toLowerCase() === name.toLowerCase()))
+      throw new GameError("name_taken", "Это имя уже занято");
+    if (existing) { existing.name = name; return existing; }
+    if (room.players.length >= MAX_PLAYERS) throw new GameError("full", "Комната заполнена");
+    const player = { id: room.nextId++, token: token(), name, connected: true, host: true };
+    room.players.unshift(player);
+    room.hostPlayerId = player.id;
+    return player;
+  }
+
   start(room) {
     const N = room.players.length;
     if (N < MIN_PLAYERS) throw new GameError("few", `Нужно минимум ${MIN_PLAYERS} игроков`);
-    const roles = deal(N, this.rnd);
+    const { comp, error } = this.compositionFor(room);
+    if (error) throw new GameError(error, error);
+    const roles = deal(N, this.rnd, comp);
     room.roles = {};
     room.players.forEach((p, i) => { room.roles[p.id] = roles[i]; });
     room.started = true;
-    room.game = { stage: "night", round: 1, dead: {}, winner: "" };
+    room.game = { stage: "night", round: 1, dead: {}, winner: "", news: null, timer: null };
     clearPlay(room);
+    if (room.settings.auto) this.startTimer(room, "night", room.settings.timers.night);
   }
 
   // Back to the lobby with the same players; new people may join again.
   reset(room) {
     room.started = false;
     room.roles = {};
-    room.game = { stage: "lobby", round: 0, dead: {}, winner: "" };
+    room.game = { stage: "lobby", round: 0, dead: {}, winner: "", news: null, timer: null };
     clearPlay(room);
+  }
+
+  // ----- game flow (run by the host's device) -----
+
+  name(room, id) { const p = room.players.find(x => x.id === id); return p ? p.name : "?"; }
+  aliveIds(room) { return room.players.filter(p => !room.game.dead[p.id]).map(p => p.id); }
+  aliveWith(room, role) { return this.aliveIds(room).find(id => room.roles[id] === role); }
+
+  // "civ", "maf", "man" or "" while the game goes on.
+  winner(room) {
+    const a = this.aliveIds(room);
+    const m = a.filter(i => isMafia(room.roles[i])).length, mn = a.filter(i => room.roles[i] === "man").length, c = a.length - m - mn;
+    if (!m && !mn) return "civ";
+    if (mn && m + c <= 1) return "man";
+    if (!mn && m >= c) return "maf";
+    return "";
+  }
+
+  _log(room, ...entry) { room.log.push(entry); if (room.log.length > 500) room.log.shift(); }
+
+  _advance(room, stage, round) {
+    const prev = room.game;
+    if (prev.stage === "day") {
+      room.lastVotes = {};
+      Object.keys(room.picks).forEach(id => { if (room.picks[id].vote !== undefined) room.lastVotes[id] = room.picks[id].vote; });
+    }
+    room.picks = {};
+    room.game.stage = stage;
+    room.game.round = round;
+    room.game.winner = this.winner(room);
+    room.game.timer = null;
+    if (room.settings.auto && !room.game.winner) this.startTimer(room, stage, room.settings.timers[stage]);
+  }
+
+  // Host marks a player out / back in by hand.
+  setDead(room, id, dead) {
+    if (!room.players.some(p => p.id === id)) return;
+    if (dead) room.game.dead[id] = true; else delete room.game.dead[id];
+    this._log(room, room.game.stage === "night" ? "lg_night" : "lg_day", room.game.round, "lg_manual", this.name(room, id), !!dead);
+    room.game.winner = this.winner(room);
+  }
+
+  // Resolves the night. choose(kind) gives the host's override or null to use the phones' choice.
+  resolveNight(room, choose = () => null) {
+    if (!room.started || room.game.stage !== "night" || room.game.winner) return;
+    const R0 = room.game.round, nm = id => this.name(room, id);
+    const L = (k, ...a) => this._log(room, "lg_night", R0, k, ...a);
+    const pick = k => { const v = choose(k); return v !== null && v !== undefined && v !== "" ? Number(v) : this.phoneChoice(room, k); };
+    const alive = id => id !== null && !room.game.dead[id];
+    const mk = pick("mk"), mn = pick("mn"), dc = pick("dc"), ms = pick("ms"), dt = pick("dt"), dn = pick("dn");
+    const sn = !room.used.sniper ? pick("sn") : null;
+    const blocked = id => id !== undefined && id !== null && id === ms;
+    if (ms !== null) L("lg_blocked", nm(ms));
+    room.lastBlock = ms;
+    let saved = null;
+    if (dc !== null) {
+      // The nurse heals only after the doctor is out.
+      const doc = this.aliveWith(room, "doc"), healer = doc !== undefined ? doc : this.aliveWith(room, "nurse");
+      if (healer !== undefined && !blocked(healer)) {
+        saved = dc; L("lg_healed", nm(dc));
+        if (dc === healer) room.selfHealUsed[healer] = true;
+      } else L("lg_heal_fail", nm(dc));
+    }
+    if (dt !== null) {
+      const det = this.aliveWith(room, "det"), checker = det !== undefined ? det : this.aliveWith(room, "ast");
+      if (blocked(checker)) { L("lg_det_fail"); if (checker !== undefined) this.addNote(room, checker, { k: "blocked", r: R0 }); }
+      else { const res = isMafia(room.roles[dt]); L("lg_det", nm(dt), res); if (checker !== undefined) this.addNote(room, checker, { k: "dt", r: R0, n: nm(dt), v: res }); }
+    }
+    if (dn !== null) {
+      const don = this.aliveWith(room, "don");
+      if (blocked(don)) { L("lg_don_fail"); if (don !== undefined) this.addNote(room, don, { k: "blocked", r: R0 }); }
+      else { const res = room.roles[dn] === "det"; L("lg_don", nm(dn), res); if (don !== undefined) this.addNote(room, don, { k: "dn", r: R0, n: nm(dn), v: res }); }
+    }
+    const died = [];
+    [["mk", mk], ["mn", mn], ["sn", sn]].forEach(([kind, tg]) => {
+      if (tg === null || !alive(tg)) return;
+      const by = KILLERS[kind];
+      if (kind === "sn") room.used.sniper = true;
+      if (kind === "mn" && blocked(this.aliveWith(room, "man"))) { L("lg_man_blocked"); return; }
+      if (kind === "sn" && blocked(this.aliveWith(room, "sn"))) { L("lg_sn_blocked"); return; }
+      if (tg === saved) { L("lg_saved", by, nm(tg)); return; }
+      if (room.roles[tg] === "lk" && !room.used.lucky) { room.used.lucky = true; L("lg_lucky", by, nm(tg)); return; }
+      room.game.dead[tg] = true; died.push(tg); L("lg_killed", by, nm(tg));
+    });
+    if (!died.length) L("lg_nobody_died");
+    room.game.news = { k: "night", r: R0, died };
+    this._advance(room, "day", R0);
+  }
+
+  // Resolves the day vote. count(id) gives the votes for a player (default: phones).
+  resolveVote(room, count, skip = false) {
+    if (!room.started || room.game.stage !== "day" || room.game.winner) return;
+    const R0 = room.game.round, tally = this.voteTally(room);
+    count = count || (id => tally[id] || 0);
+    const D = (k, ...a) => this._log(room, "lg_day", R0, k, ...a);
+    const a = this.aliveIds(room);
+    let max = 0; a.forEach(i => { max = Math.max(max, count(i)); });
+    const top = a.filter(i => count(i) === max);
+    let out = null, tie = false, pardoned = null;
+    if (skip || max === 0) D("lg_no_exile");
+    else if (top.length > 1) { tie = true; D("lg_tie", top.map(i => this.name(room, i)).join(", "), max); }
+    else {
+      const judge = this.aliveWith(room, "jd");
+      const pardon = judge !== undefined && !room.used.judge && room.picks[judge] ? room.picks[judge].jd : undefined;
+      if (pardon === top[0]) { room.used.judge = true; pardoned = top[0]; D("lg_pardoned", this.name(room, top[0]), max); }
+      else { out = top[0]; room.game.dead[out] = true; D("lg_exiled", this.name(room, out), max); }
+    }
+    room.game.news = { k: "day", r: R0, out, tie, pardoned };
+    this._advance(room, "night", R0 + 1);
+  }
+
+  // ----- timers (shown on every phone) -----
+
+  startTimer(room, label, seconds) {
+    seconds = Math.max(1, Math.min(3600, Math.floor(Number(seconds)) || 60));
+    room.game.timer = { label: String(label).slice(0, 10), ends: this.now() + seconds * 1000, total: seconds };
+  }
+  stopTimer(room) { room.game.timer = null; }
+  timerState(room) {
+    const tm = room.game.timer;
+    return tm ? { label: tm.label, left: Math.max(0, tm.ends - this.now()), total: tm.total } : null;
+  }
+  timerExpired(room) { const tm = room.game.timer; return !!tm && this.now() >= tm.ends; }
+
+  // Automatic host: is everyone done with this phase?
+  // Actions a player must pick before the phase can end (the sniper's one shot is optional).
+  requiredActions(room, id) { return Object.keys(this.actionsFor(room, id)).filter(k => !OPTIONAL.includes(k)); }
+  phaseDone(room) {
+    const alive = this.aliveIds(room);
+    if (room.game.stage === "night") {
+      return alive.every(id => this.requiredActions(room, id).every(k => room.picks[id] && room.picks[id][k] !== undefined));
+    }
+    return alive.every(id => room.picks[id] && room.picks[id].vote !== undefined);
+  }
+
+  // ----- chat for players who are out -----
+
+  canChat(room, playerId) { return room.started && (!!room.game.dead[playerId] || !!room.game.winner); }
+  addChat(room, playerId, text) {
+    if (!this.canChat(room, playerId)) throw new GameError("no_chat", "Чат доступен только выбывшим");
+    text = String(text || "").replace(/[\u0000-\u001f\u007f]/g, " ").trim().slice(0, 200);
+    if (!text) return;
+    room.chat.push({ id: playerId, name: this.name(room, playerId), text });
+    if (room.chat.length > 60) room.chat.shift();
   }
 
   // The host's device runs the game; it pushes the public part here for everyone to see.
@@ -152,7 +361,9 @@ class RoomStore {
       stage: g.stage === "day" ? "day" : "night",
       round: Number.isInteger(g.round) && g.round > 0 && g.round < 1000 ? g.round : room.game.round,
       dead,
-      winner: typeof g.winner === "string" ? g.winner.slice(0, 80) : ""
+      winner: typeof g.winner === "string" ? g.winner.slice(0, 80) : "",
+      news: prev.news || null,
+      timer: prev.timer || null
     };
     // A new night or day starts with empty choices.
     if (prev.stage !== room.game.stage || prev.round !== room.game.round) {
@@ -174,7 +385,12 @@ class RoomStore {
     const others = alive.filter(id => id !== playerId);
     const aliveRole = k => alive.some(id => room.roles[id] === k);
     const out = {};
-    if (g.stage === "day") { out.vote = others; return out; }
+    if (g.stage === "day") {
+      out.vote = others;
+      if (role === "jd" && !room.used.judge) out.jd = alive;
+      return out;
+    }
+    if (role === "sn" && !room.used.sniper) out.sn = others;
     if (isMafia(role)) out.mk = others.filter(id => !isMafia(room.roles[id]));
     if (role === "don") out.dn = others;
     if (role === "det" || (role === "ast" && !aliveRole("det"))) out.dt = others;
@@ -240,13 +456,23 @@ class RoomStore {
 
   // What every participant may see.
   publicState(room) {
+    const reveal = room.settings.reveal || !!room.game.winner;
+    const c = this.compositionFor(room);
     return {
       code: room.code,
       started: room.started,
       hostConnected: room.hostConnected,
       minPlayers: MIN_PLAYERS,
-      players: room.players.map(p => ({ id: p.id, name: p.name, connected: p.connected, dead: !!room.game.dead[p.id], bot: !!p.bot })),
-      game: { stage: room.game.stage, round: room.game.round, winner: room.game.winner }
+      settings: { mode: room.settings.mode, reveal: room.settings.reveal, auto: room.settings.auto, timers: { ...room.settings.timers } },
+      comp: c.comp || null,
+      compError: c.error || "",
+      players: room.players.map(p => {
+        const dead = !!room.game.dead[p.id];
+        const o = { id: p.id, name: p.name, connected: p.connected, dead, bot: !!p.bot, host: !!p.host };
+        if (room.started && (dead || room.game.winner) && reveal) o.role = room.roles[p.id];
+        return o;
+      }),
+      game: { stage: room.game.stage, round: room.game.round, winner: room.game.winner, news: room.game.news || null, timer: this.timerState(room) }
     };
   }
 
@@ -267,6 +493,7 @@ class RoomStore {
       out.teamPicks = room.players
         .filter(p => p.id !== playerId && isMafia(room.roles[p.id]) && !room.game.dead[p.id] && room.picks[p.id] && room.picks[p.id].mk !== undefined)
         .map(p => ({ id: p.id, target: room.picks[p.id].mk }));
+    if (this.canChat(room, playerId)) out.chat = room.chat.slice();
     return out;
   }
 
@@ -274,7 +501,12 @@ class RoomStore {
   hostView(room) {
     return {
       ...this.publicState(room),
-      roles: room.started ? room.players.map(p => ({ id: p.id, name: p.name, role: room.roles[p.id] })) : []
+      roles: room.started ? room.players.map(p => ({ id: p.id, name: p.name, role: room.roles[p.id] })) : [],
+      log: room.log.slice(),
+      chat: room.chat.slice(),
+      used: { ...room.used },
+      hostPlayerId: room.hostPlayerId,
+      fullSettings: JSON.parse(JSON.stringify(room.settings))
     };
   }
 
@@ -288,7 +520,13 @@ class RoomStore {
 RoomStore.prototype.restore = function (saved) {
   if (!saved || typeof saved.code !== "string" || !Array.isArray(saved.players)) return null;
   saved.players.forEach(p => { p.connected = !!p.bot; });
+  saved.players.forEach(p => { if (p.host) p.connected = true; });
   ["picks", "notes", "selfHealUsed", "lastVotes"].forEach(k => { if (!saved[k] || typeof saved[k] !== "object") saved[k] = {}; });
+  if (!saved.used) saved.used = { sniper: false, judge: false, lucky: false };
+  if (!Array.isArray(saved.log)) saved.log = [];
+  if (!Array.isArray(saved.chat)) saved.chat = [];
+  if (!saved.settings) saved.settings = DEFAULT_SETTINGS();
+  if (saved.hostPlayerId === undefined) saved.hostPlayerId = null;
   if (saved.lastBlock === undefined) saved.lastBlock = null;
   saved.touched = this.now();
   this.rooms.set(saved.code, saved);

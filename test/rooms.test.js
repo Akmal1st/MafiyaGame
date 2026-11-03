@@ -89,7 +89,8 @@ test("updateGame sanitizes host input", () => {
   const room = roomWith(s, 5);
   s.start(room);
   s.updateGame(room, { stage: "evil", round: -3, dead: [1, 999, "x"], winner: 5 });
-  assert.deepStrictEqual(room.game, { stage: "night", round: 1, dead: { 1: true }, winner: "" });
+  const { stage, round, dead, winner } = room.game;
+  assert.deepStrictEqual({ stage, round, dead, winner }, { stage: "night", round: 1, dead: { 1: true }, winner: "" });
 });
 
 test("reset returns to lobby and allows joining again", () => {

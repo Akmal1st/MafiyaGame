@@ -304,16 +304,27 @@ function beep(n=1){
 }
 
 // ---------- voice narrator (host phone) ----------
-// Speaks in the chosen language; if the phone has no Uzbek voice, it speaks Russian instead.
+// Always speaks in the app's language. Phones rarely ship an Uzbek voice, so Uzbek text is read by a
+// Turkish voice (close pronunciation, spelling adapted), or by the phone's default voice if there is none.
+let voiceList=[];
+const loadVoices=()=>{try{voiceList=speechSynthesis.getVoices()}catch{}};
+if("speechSynthesis" in window){loadVoices();speechSynthesis.addEventListener?.("voiceschanged",loadVoices)}
+const findVoice=p=>voiceList.find(v=>v.lang&&v.lang.toLowerCase().replace("_","-").startsWith(p));
+// Uzbek Latin spelled the way a Turkish voice reads it.
+const uzForTurkish=s=>s.replace(/[ʻʼ‘’`]/g,"'").replace(/o'/gi,m=>m[0]==="O"?"O":"o").replace(/g'/gi,m=>m[0]==="G"?"Ğ":"ğ")
+ .replace(/sh/gi,m=>m[0]==="S"?"Ş":"ş").replace(/ch/gi,m=>m[0]==="C"?"Ç":"ç").replace(/j/g,"c").replace(/J/g,"C")
+ .replace(/q/g,"k").replace(/Q/g,"K").replace(/x/g,"h").replace(/X/g,"H").replace(/'/g,"");
 function speak(key,...args){
  if(!prefs.voice||!("speechSynthesis" in window))return;
- const voices=speechSynthesis.getVoices();
- let lang=I18N.lang;
- if(lang==="uz"&&!voices.some(v=>/^uz/i.test(v.lang)))lang="ru";
- const text=I18N.tIn(lang,key,...args).replace(/<[^>]+>/g,"");
- const u=new SpeechSynthesisUtterance(text);
- u.lang=lang==="uz"?"uz-UZ":"ru-RU";
- const v=voices.find(v=>v.lang&&v.lang.toLowerCase().startsWith(lang));if(v)u.voice=v;
+ if(!voiceList.length)loadVoices();
+ const lang=I18N.lang;
+ let text=I18N.tIn(lang,key,...args).replace(/<[^>]+>/g,"").replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{FE0F}]/gu,"").trim();
+ const u=new SpeechSynthesisUtterance();
+ let v=findVoice(lang);
+ if(lang==="uz"&&!v){const tr=findVoice("tr");if(tr){v=tr;text=uzForTurkish(text)}}
+ u.text=text;
+ u.lang=v?v.lang:lang==="uz"?"uz-UZ":"ru-RU";
+ if(v)u.voice=v;
  u.rate=0.95;
  speechSynthesis.speak(u);
 }

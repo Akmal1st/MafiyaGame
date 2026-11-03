@@ -310,10 +310,10 @@ let voiceList=[];
 const loadVoices=()=>{try{voiceList=speechSynthesis.getVoices()}catch{}};
 if("speechSynthesis" in window){loadVoices();speechSynthesis.addEventListener?.("voiceschanged",loadVoices)}
 const findVoice=p=>voiceList.find(v=>v.lang&&v.lang.toLowerCase().replace("_","-").startsWith(p));
-// Uzbek texts use the new alphabet (ó, ǵ, ş, ç). Voices are trained on the old spelling, so convert back for them.
-const uzOld=s=>s.replace(/Ó/g,"Oʻ").replace(/ó/g,"oʻ").replace(/Ǵ/g,"Gʻ").replace(/ǵ/g,"gʻ").replace(/Ş/g,"Sh").replace(/ş/g,"sh").replace(/Ç/g,"Ch").replace(/ç/g,"ch");
+// Uzbek texts use the new alphabet (ö, ǵ, ş, ç). Voices are trained on the old spelling, so convert back for them.
+const uzOld=s=>s.replace(/Ö/g,"Oʻ").replace(/ö/g,"oʻ").replace(/Ǵ/g,"Gʻ").replace(/ǵ/g,"gʻ").replace(/Ş/g,"Sh").replace(/ş/g,"sh").replace(/Ç/g,"Ch").replace(/ç/g,"ch");
 // Uzbek spelled the way a Turkish voice reads it (ş, ç are the same; ǵ is close to ğ).
-const uzForTurkish=s=>s.replace(/[ʻʼ‘’`']/g,"").replace(/Ó/g,"O").replace(/ó/g,"o").replace(/Ǵ/g,"Ğ").replace(/ǵ/g,"ğ")
+const uzForTurkish=s=>s.replace(/[ʻʼ‘’`']/g,"").replace(/Ö/g,"O").replace(/ö/g,"o").replace(/Ǵ/g,"Ğ").replace(/ǵ/g,"ğ")
  .replace(/j/g,"c").replace(/J/g,"C").replace(/q/g,"k").replace(/Q/g,"K").replace(/x/g,"h").replace(/X/g,"H");
 function speak(key,...args){
  if(!prefs.voice||!("speechSynthesis" in window))return;

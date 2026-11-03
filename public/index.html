@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Мафия онлайн</title>
+<style>
+:root{--bg:#14121c;--card:#201d2e;--tx:#f1eefb;--mut:#9a95b3;--ac:#e0314b;--ok:#3fae6a;--ln:#322e47;color-scheme:dark;
+box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media(prefers-color-scheme:light){:root:not([data-theme="dark"]){--bg:#f4f2fa;--card:#fff;--tx:#1c1a28;--mut:#6b6683;--ln:#dcd8ea;color-scheme:light}}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--tx);font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+#app{max-width:480px;margin:0 auto;padding:16px;min-height:100vh}
+h1{font-size:24px;margin:8px 0 4px;text-align:center}
+.sub{color:var(--mut);text-align:center;margin:0 0 16px;font-size:14px}
+.card{background:var(--card);border:1px solid var(--ln);border-radius:16px;padding:14px;margin-bottom:14px}
+.row{display:flex;gap:8px}
+input{flex:1;min-width:0;font-size:17px;padding:12px;border-radius:12px;border:1px solid var(--ln);background:var(--bg);color:var(--tx)}
+input.code{text-transform:uppercase;letter-spacing:4px;text-align:center;font-weight:700}
+button{font:inherit;font-size:17px;font-weight:600;border:0;border-radius:12px;padding:13px 16px;background:var(--ac);color:#fff;cursor:pointer}
+button.sec{background:var(--ln);color:var(--tx)}
+button.big{width:100%;padding:16px;font-size:19px}
+button.sm{padding:6px 10px;font-size:14px}
+button:disabled{opacity:.4}
+.pl{display:flex;align-items:center;justify-content:space-between;padding:9px 4px;border-bottom:1px solid var(--ln);gap:8px}
+.pl:last-child{border:0}
+.pl .x{background:none;color:var(--mut);padding:4px 10px;font-size:20px}
+.chips{display:flex;flex-wrap:wrap;gap:8px}
+.chip{padding:6px 10px;border-radius:20px;background:var(--bg);border:1px solid var(--ln);font-size:14px}
+.center{text-align:center}
+.role{font-size:68px}
+.rname{font-size:30px;font-weight:800;margin:4px 0}
+.rdesc{color:var(--mut);font-size:16px;line-height:1.4}
+.team{margin-top:12px;padding:10px;border-radius:12px;background:var(--bg);font-size:15px}
+.dead span.n{opacity:.5;text-decoration:line-through}
+.fl{display:block;margin-top:10px;font-size:14px;color:var(--mut)}
+select{width:100%;margin-top:4px;font-size:16px;padding:10px;border-radius:10px;border:1px solid var(--ln);background:var(--bg);color:var(--tx)}
+.lg{padding:7px 0;border-bottom:1px solid var(--ln);font-size:14px;line-height:1.35}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--ok);margin-right:6px;vertical-align:middle}
+.dot.off{background:var(--mut);opacity:.5}
+.link{word-break:break-all;font-size:15px;padding:10px;border-radius:10px;background:var(--bg);border:1px solid var(--ln);margin:8px 0}
+.qr{display:block;width:200px;height:200px;margin:8px auto;background:#fff;border-radius:12px;padding:8px}
+.bigcode{font-size:36px;font-weight:800;letter-spacing:6px;text-align:center;margin:4px 0}
+.err{color:var(--ac);font-size:14px;margin-top:8px;min-height:1em}
+.banner{position:sticky;top:0;z-index:5;background:var(--ac);color:#fff;text-align:center;padding:6px;border-radius:10px;font-size:14px;margin-bottom:10px}
+.mt{margin-top:10px}
+a{color:var(--mut)}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script src="/socket.io/socket.io.js"></script>
+<script src="/roles.js"></script>
+<script>
+const {R,ORDER,MIN_PLAYERS,composition,isMafia}=window.MafiaRoles;
+const app=document.getElementById("app");
+const esc=s=>String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const $=id=>document.getElementById(id);
+
+// ---------- local storage (best effort) ----------
+const store={
+ get(k){try{return JSON.parse(localStorage.getItem(k))}catch{return null}},
+ set(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch{}},
+ del(k){try{localStorage.removeItem(k)}catch{}}
+};
+const SESSION_KEY="mafia:session"; // {kind:'host'|'player', code, token}
+const hostGameKey=code=>"mafia:host:"+code;
+
+// ---------- app state ----------
+const urlRoom=(new URLSearchParams(location.search).get("room")||"").trim().toUpperCase();
+let V={screen:"loading",err:"",state:null,secret:null,showRole:false,me:null,session:store.get(SESSION_KEY)};
+let G=null; // host-side game tracker (only on the host's device)
+
+const socket=io({reconnectionDelayMax:4000});
+const emit=(ev,data)=>new Promise(res=>socket.timeout(8000).emit(ev,data,(err,r)=>res(err?{ok:false,error:"Нет связи с сервером"}:r)));
+
+function inviteLink(code){return `${location.origin}/?room=${code}`}
+function setSession(s){V.session=s;s?store.set(SESSION_KEY,s):store.del(SESSION_KEY)}
+function goHome(){setSession(null);G=null;V.state=null;V.secret=null;history.replaceState(null,"","/");V.screen="home";render()}
+
+// ---------- connection lifecycle ----------
+let connectedOnce=false;
+socket.on("connect",async()=>{
+ const first=!connectedOnce;connectedOnce=true;
+ const s=V.session;
+ // Joining a different room by link takes priority over an old saved session.
+ if(s&&(!urlRoom||urlRoom===s.code)){
+  if(s.kind==="host"){
+   const r=await emit("host:resume",{code:s.code,hostToken:s.token});
+   if(r.ok){onHostState(r.state);if(first)V.screen="host";return render()}
+  }else{
+   const r=await emit("player:resume",{code:s.code,token:s.token});
+   if(r.ok){V.me={id:r.playerId,name:r.name};V.state=r.state;V.secret=r.secret;if(first)V.screen="player";return render()}
+  }
+  setSession(null); // room expired or we were removed
+  if(!first){V.screen=urlRoom?"join":"home";V.err="Комната больше не существует";return render()}
+ }
+ if(first){V.screen=urlRoom?"join":"home";render()}
+});
+socket.on("disconnect",()=>render());
+socket.on("state",st=>{if(V.session?.kind==="player"){V.state=st;render()}});
+socket.on("secret",sec=>{V.secret=sec;if(!sec)V.showRole=false;render()});
+socket.on("host:state",st=>{onHostState(st);render()});
+socket.on("kicked",()=>{setSession(null);V.screen="kicked";render()});
+
+function onHostState(st){
+ V.state=st;
+ if(!st.started){G=null;store.del(hostGameKey(st.code));return}
+ // Load or create the host's tracker for this deal.
+ const key=st.roles.map(r=>r.id+r.role).join(",");
+ if(!G||G.key!==key){
+  const saved=store.get(hostGameKey(st.code));
+  if(saved&&saved.key===key)G=saved;
+  else{
+   G={key,round:st.game.round||1,stage:st.game.stage==="day"?"day":"night",dead:{},log:[],votes:{},night:{},showRoles:false};
+   st.players.forEach(p=>{if(p.dead)G.dead[p.id]=true});
+  }
+ }
+}
+
+// ---------- rendering ----------
+function render(){
+ const off=!socket.connected&&V.screen!=="loading"?`<div class="banner">Нет связи с сервером — переподключаемся…</div>`:"";
+ const screens={loading,home,join,player,host,kicked};
+ const y=scrollY;
+ app.innerHTML=off+(screens[V.screen]||home)();
+ bind[V.screen]?.();
+ scrollTo(0,y);
+}
+const bind={};
+
+function loading(){return `<h1>🎭 Мафия</h1><p class="sub">Подключение…</p>`}
+
+function home(){return `
+ <h1>🎭 Мафия онлайн</h1><p class="sub">Каждый играет со своего телефона</p>
+ <div class="card"><b>Я ведущий</b><p class="sub" style="text-align:left;margin:6px 0 10px">Создайте комнату и отправьте ссылку игрокам.</p>
+  <button class="big" id="create">➕ Создать игру</button></div>
+ <div class="card"><b>Я игрок</b><p class="sub" style="text-align:left;margin:6px 0 10px">Откройте ссылку от ведущего или введите код комнаты.</p>
+  <div class="row"><input id="code" class="code" maxlength="5" placeholder="КОД" autocomplete="off"><button id="go">Войти</button></div>
+  <div class="err">${esc(V.err)}</div></div>
+ <p class="sub"><a href="/offline.html">Офлайн-режим: один телефон на всех</a></p>`}
+bind.home=()=>{
+ $("create").onclick=async e=>{
+  e.target.disabled=true;
+  const r=await emit("host:create",{});
+  if(!r.ok){V.err=r.error;return render()}
+  setSession({kind:"host",code:r.code,token:r.hostToken});
+  history.replaceState(null,"","/");
+  onHostState(r.state);V.err="";V.screen="host";render();
+ };
+ const go=()=>{const c=$("code").value.trim().toUpperCase();if(c.length<4)return;location.href="/?room="+encodeURIComponent(c)};
+ $("go").onclick=go;$("code").onkeydown=e=>{if(e.key==="Enter")go()};
+};
+
+function join(){return `
+ <h1>🎭 Мафия</h1><p class="sub">Комната <b>${esc(urlRoom)}</b></p>
+ <div class="card"><b>Как вас зовут?</b>
+  <div class="row mt"><input id="nm" placeholder="Ваше имя" maxlength="20" autocomplete="off"><button id="jn">Войти</button></div>
+  <div class="err">${esc(V.err)}</div></div>
+ <p class="sub"><a href="/">На главную</a></p>`}
+bind.join=()=>{
+ const inp=$("nm");inp.focus();
+ const j=async()=>{
+  const name=inp.value.trim();if(!name)return;
+  $("jn").disabled=true;
+  const r=await emit("player:join",{code:urlRoom,name});
+  if(!r.ok){V.err=r.error;render();$("nm").value=name;return}
+  setSession({kind:"player",code:urlRoom,token:r.token});
+  V.me={id:r.playerId,name};V.state=r.state;V.secret=null;V.err="";V.screen="player";render();
+ };
+ $("jn").onclick=j;inp.onkeydown=e=>{if(e.key==="Enter")j()};
+};
+
+function kicked(){return `<h1>🚪</h1><p class="sub">Ведущий убрал вас из комнаты.</p><button class="big" id="home">На главную</button>`}
+bind.kicked=()=>{$("home").onclick=goHome};
+
+function playerList(st,opts={}){
+ return st.players.map((p,i)=>`<div class="pl ${p.dead?"dead":""}"><span><span class="dot ${p.connected?"":"off"}"></span><span class="n">${opts.started?(p.dead?"💀 ":"🙂 "):(i+1)+". "}${esc(p.name)}</span>${V.me&&p.id===V.me.id?" <b>(вы)</b>":""}</span>${opts.kick?`<button class="x" data-kick="${p.id}" title="Убрать">✕</button>`:""}</div>`).join("");
+}
+function compChips(c){return ORDER.filter(k=>c[k]>0).map(k=>`<span class="chip">${R[k].e} ${R[k].n}: <b>${c[k]}</b></span>`).join("")}
+function stageTitle(g){return g.stage==="day"?`☀️ День ${g.round}`:`🌙 Ночь ${g.round}`}
+
+// ---------- player screen ----------
+function player(){
+ const st=V.state;if(!st)return loading();
+ const N=st.players.length,host=st.hostConnected?"":`<p class="sub">⚠️ Ведущий не в сети</p>`;
+ if(!st.started){return `
+  <h1>🎭 Комната ${esc(st.code)}</h1><p class="sub">Вы вошли как <b>${esc(V.me?.name||"")}</b></p>${host}
+  <div class="card center"><b>Ждём начала игры…</b><p class="sub" style="margin:6px 0 0">Ведущий начнёт, когда все соберутся.</p></div>
+  <div class="card"><b>Игроки: ${N}</b>${playerList(st)}</div>
+  <button class="sec big" id="leave">Выйти из комнаты</button>`}
+ const sec=V.secret,meDead=st.players.find(p=>p.id===V.me?.id)?.dead;
+ let roleHtml=`<p class="sub" style="margin:0">Роль ещё не получена…</p>`;
+ if(sec){
+  const r=R[sec.role];
+  let extra="";
+  if(isMafia(sec.role))extra=sec.team.length?`<div class="team">Твоя команда: <b>${sec.team.map(t=>esc(t.name)+(t.role==="don"?" 🎩":"")).join(", ")}</b></div>`:`<div class="team">Ты единственный в мафии.</div>`;
+  if(sec.knows.length)extra+=`<div class="team">${sec.role==="ast"?"Детектив":"Доктор"}: <b>${sec.knows.map(t=>esc(t.name)).join(", ")}</b></div>`;
+  roleHtml=V.showRole
+   ?`<div class="role">${r.e}</div><div class="rname" style="color:${r.c}">${r.n}</div><div class="rdesc">${r.d}</div>${extra}<button class="sec big mt" id="tg">🙈 Скрыть роль</button>`
+   :`<div class="role">🂠</div><p class="sub">Убедитесь, что никто не смотрит в ваш экран.</p><button class="big" id="tg">👁 Показать мою роль</button>`;
+ }
+ return `
+  <h1>${stageTitle(st.game)}</h1><p class="sub">Комната ${esc(st.code)} · ${esc(V.me?.name||"")}</p>${host}
+  ${st.game.winner?`<div class="card center" style="border-color:var(--ac)"><b style="font-size:20px">${esc(st.game.winner)}</b></div>`:""}
+  ${meDead?`<div class="card center"><b>💀 Вы выбыли из игры</b><p class="sub" style="margin:6px 0 0">Не подсказывайте живым игрокам.</p></div>`:""}
+  <div class="card center" style="padding:20px 16px">${roleHtml}</div>
+  <div class="card"><b>Живых: ${st.players.filter(p=>!p.dead).length} из ${N}</b>${playerList(st,{started:true})}</div>`;
+}
+bind.player=()=>{
+ const tg=$("tg");if(tg)tg.onclick=()=>{V.showRole=!V.showRole;render()};
+ const lv=$("leave");if(lv)lv.onclick=async()=>{
+  if(!confirm("Выйти из комнаты?"))return;
+  await emit("player:leave",{code:V.session.code,token:V.session.token});goHome();
+ };
+};
+
+// ---------- host screen ----------
+function host(){
+ const st=V.state;if(!st)return loading();
+ return st.started?hostGame(st):hostLobby(st);
+}
+function hostLobby(st){
+ const N=st.players.length,ok=N>=MIN_PLAYERS,link=inviteLink(st.code);
+ return `
+ <h1>🎭 Вы ведущий</h1><p class="sub">Отправьте ссылку игрокам или покажите QR-код</p>
+ <div class="card center">
+  <div class="sub" style="margin:0">Код комнаты</div><div class="bigcode">${esc(st.code)}</div>
+  <img class="qr" src="/qr.svg?t=${encodeURIComponent(link)}" alt="QR-код ссылки">
+  <div class="link" id="lnk">${esc(link)}</div>
+  <div class="row"><button class="sec" id="copy" style="flex:1">📋 Копировать</button>${navigator.share?`<button id="share" style="flex:1">📤 Поделиться</button>`:""}</div>
+ </div>
+ <div class="card"><b>Игроки: ${N}</b>${N?playerList(st,{kick:true}):`<p class="sub" style="margin:10px 0 0">Пока никого. Нужно минимум ${MIN_PLAYERS} человек.</p>`}</div>
+ <div class="card"><b>Роли в игре</b>${ok?`<div class="chips mt">${compChips(composition(N))}</div>`:`<p class="sub" style="margin:10px 0 0">Нужно ещё ${MIN_PLAYERS-N} игрок(а).</p>`}</div>
+ <div class="err">${esc(V.err)}</div>
+ <button class="big" id="start" ${ok?"":"disabled"}>🎲 Начать игру и раздать роли</button>
+ <button class="sec big mt" id="close">Закрыть комнату</button>`;
+}
+bind.host=()=>{
+ const st=V.state;if(!st)return;
+ if(st.started)return bindHostGame(st);
+ const link=inviteLink(st.code);
+ $("copy").onclick=async e=>{
+  try{await navigator.clipboard.writeText(link);e.target.textContent="✅ Скопировано"}
+  catch{getSelection().selectAllChildren($("lnk"));e.target.textContent="Выделено — скопируйте"}
+ };
+ const sh=$("share");if(sh)sh.onclick=()=>navigator.share({title:"Мафия",text:`Заходи в игру «Мафия»! Код комнаты: ${st.code}`,url:link}).catch(()=>{});
+ app.querySelectorAll("[data-kick]").forEach(b=>b.onclick=async()=>{
+  const p=st.players.find(x=>x.id===+b.dataset.kick);
+  if(!confirm(`Убрать ${p?p.name:"игрока"} из комнаты?`))return;
+  const r=await emit("host:kick",{code:st.code,hostToken:V.session.token,playerId:+b.dataset.kick});
+  if(!r.ok){V.err=r.error;render()}
+ });
+ $("start").onclick=async e=>{
+  if(!confirm(`Начать игру с ${st.players.length} игроками? После старта новые игроки войти не смогут.`))return;
+  e.target.disabled=true;
+  const r=await emit("host:start",{code:st.code,hostToken:V.session.token});
+  if(!r.ok){V.err=r.error;return render()}
+  V.err="";onHostState(r.state);render();
+ };
+ $("close").onclick=()=>{if(confirm("Закрыть комнату? Игроки останутся без ведущего."))goHome()};
+};
+
+// ---------- host game tracker (runs on the host's device) ----------
+const roleOf=id=>V.state.roles.find(r=>r.id===id)?.role;
+const nameOf=id=>V.state.players.find(p=>p.id===id)?.name||"?";
+const aliveIds=()=>V.state.players.map(p=>p.id).filter(id=>!G.dead[id]);
+const aliveRole=k=>aliveIds().find(id=>roleOf(id)===k);
+function winner(){
+ const a=aliveIds(),m=a.filter(i=>isMafia(roleOf(i))).length,mn=a.filter(i=>roleOf(i)==="man").length,t=a.length-m-mn;
+ if(!m&&!mn)return "🏆 Победа мирных жителей!";
+ if(mn&&m+t<=1)return "🔪 Победа маньяка!";
+ if(!mn&&m>=t)return "🎩 Победа мафии!";
+ return "";
+}
+function saveG(){
+ store.set(hostGameKey(V.state.code),G);
+ emit("host:game",{code:V.state.code,hostToken:V.session.token,game:{
+  stage:G.stage,round:G.round,winner:winner(),dead:Object.keys(G.dead).filter(k=>G.dead[k]).map(Number)}});
+}
+function opts(sel){return `<option value="">— никого —</option>`+aliveIds().map(i=>`<option value="${i}" ${String(i)===String(sel)?"selected":""}>${esc(nameOf(i))}</option>`).join("")}
+
+function hostGame(st){
+ const a=aliveIds(),w=winner(),night=G.stage==="night";
+ let h=`<h1>${night?"🌙 Ночь":"☀️ День"} ${G.round}</h1><p class="sub">Комната ${esc(st.code)} · Живых: ${a.length} из ${st.players.length}</p>`;
+ if(w)h+=`<div class="card center" style="border-color:var(--ac)"><b style="font-size:20px">${w}</b><button class="big mt" id="again">🔄 Новая игра (те же игроки)</button></div>`;
+ h+=`<div class="card"><div class="row" style="justify-content:space-between;align-items:center"><b>Игроки</b><button class="sec sm" id="tr">${G.showRoles?"🙈 Скрыть роли":"👁 Показать роли"}</button></div>`
+ +st.players.map(p=>{const r=R[roleOf(p.id)];return `<div class="pl ${G.dead[p.id]?"dead":""}"><span><span class="dot ${p.connected?"":"off"}"></span><span class="n">${G.dead[p.id]?"💀":"🙂"} ${esc(p.name)}</span>${G.showRoles&&r?` · ${r.e} ${r.n}`:""}</span><button class="x tg" data-i="${p.id}" style="font-size:14px">${G.dead[p.id]?"вернуть":"выбыл"}</button></div>`}).join("")+`</div>`;
+ if(!w&&night){
+  const f=(k,l,s)=>s?`<label class="fl">${l}<select data-k="${k}">${opts(G.night[k]??"")}</select></label>`:"";
+  const anyMafia=a.some(i=>isMafia(roleOf(i)));
+  h+=`<div class="card"><b>Действия ночи</b>`
+   +f("mk","🔫 Кого убила мафия",anyMafia)
+   +f("mn","🔪 Кого убил маньяк",aliveRole("man")!==undefined)
+   +f("dc","💉 Кого лечил доктор / медсестра",aliveRole("doc")!==undefined||aliveRole("nurse")!==undefined)
+   +f("ms","💋 Кого отвлекла любовница",aliveRole("mis")!==undefined)
+   +f("dt","🕵️ Кого проверил детектив / помощник",aliveRole("det")!==undefined||aliveRole("ast")!==undefined)
+   +`<button class="big" id="en" style="margin-top:14px">☀️ Подвести итоги ночи</button></div>`;
+ }else if(!w){
+  h+=`<div class="card"><b>Голосование</b>`+a.map(i=>`<div class="pl"><span>${esc(nameOf(i))}</span><span><button class="sec vb" data-i="${i}" data-d="-1" style="padding:4px 14px">−</button> <b style="display:inline-block;min-width:28px;text-align:center">${G.votes[i]||0}</b> <button class="vb" data-i="${i}" data-d="1" style="padding:4px 14px">+</button></span></div>`).join("")
+   +`<button class="big" id="ev" style="margin-top:14px">⚖️ Подвести голосование</button><button class="sec big" id="sk" style="margin-top:8px">Без изгнания</button></div>`;
+ }
+ h+=`<div class="card"><b>📜 Журнал</b> <span class="sub">(видит только ведущий)</span>`+(G.log.length?G.log.slice().reverse().map(l=>`<div class="lg">${l}</div>`).join(""):`<p class="sub" style="margin:8px 0 0;text-align:left">Пока пусто.</p>`)+`</div>`
+ +`<div class="card"><b>Меню ведущего</b><p class="sub" style="text-align:left;margin:6px 0 10px">Ссылка на комнату: ${esc(inviteLink(st.code))}</p>`
+ +`<button class="sec big" id="reset">🔄 Вернуться в лобби (новая раздача)</button><button class="sec big mt" id="close">Закрыть комнату</button></div>`;
+ return h;
+}
+function bindHostGame(st){
+ const pre=()=>(G.stage==="night"?"Ночь ":"День ")+G.round+": ";
+ const reset=async()=>{
+  const r=await emit("host:reset",{code:st.code,hostToken:V.session.token});
+  if(r.ok){onHostState(r.state);render()}
+ };
+ $("tr").onclick=()=>{G.showRoles=!G.showRoles;store.set(hostGameKey(st.code),G);render()};
+ app.querySelectorAll("select").forEach(s=>s.onchange=()=>{G.night[s.dataset.k]=s.value;store.set(hostGameKey(st.code),G)});
+ app.querySelectorAll(".tg").forEach(b=>b.onclick=()=>{const i=+b.dataset.i;G.dead[i]=!G.dead[i];G.log.push(pre()+`ведущий вручную: <b>${esc(nameOf(i))}</b> ${G.dead[i]?"выбыл":"возвращён в игру"}`);saveG();render()});
+ app.querySelectorAll(".vb").forEach(b=>b.onclick=()=>{const i=+b.dataset.i;G.votes[i]=Math.max(0,(G.votes[i]||0)+ +b.dataset.d);store.set(hostGameKey(st.code),G);render()});
+ const en=$("en");if(en)en.onclick=endNight;
+ const ev=$("ev");if(ev)ev.onclick=()=>endVote(false);
+ const sk=$("sk");if(sk)sk.onclick=()=>endVote(true);
+ const ag=$("again");if(ag)ag.onclick=reset;
+ $("reset").onclick=()=>{if(confirm("Вернуться в лобби? Текущая игра закончится, роли раздадутся заново."))reset()};
+ $("close").onclick=()=>{if(confirm("Закрыть комнату? Игроки останутся без ведущего."))goHome()};
+}
+function endNight(){
+ const n=G.night,nm=i=>`<b>${esc(nameOf(i))}</b>`,L=x=>G.log.push(`Ночь ${G.round}: ${x}`);
+ const g=k=>n[k]===undefined||n[k]===""?null:+n[k];
+ const mk=g("mk"),mn=g("mn"),dc=g("dc"),ms=g("ms"),dt=g("dt");
+ const blocked=id=>id!==undefined&&id===ms;
+ if(ms!==null)L(`любовница отвлекла ${nm(ms)}`);
+ let saved=null;
+ if(dc!==null){
+  // The nurse heals only after the doctor is out.
+  const doc=aliveRole("doc"),nurse=aliveRole("nurse"),healer=doc!==undefined?doc:nurse;
+  if(healer!==undefined&&!blocked(healer)){saved=dc;L(`лечили ${nm(dc)}`)}else L(`лечение ${nm(dc)} сорвано`);
+ }
+ if(dt!==null){
+  const det=aliveRole("det"),checker=det!==undefined?det:aliveRole("ast");
+  if(blocked(checker))L("проверка детектива сорвана");
+  else L(`детектив проверил ${nm(dt)}: ${isMafia(roleOf(dt))?"мафия":"не мафия"}`);
+ }
+ let any=false;
+ [[mk,"мафия"],[mn,"маньяк"]].forEach(([t,by])=>{
+  if(t===null)return;
+  if(by==="маньяк"&&blocked(aliveRole("man"))){L("маньяк был отвлечён — убийство не состоялось");return}
+  if(t===saved){L(`${by} стрелял в ${nm(t)} — <b>спасён!</b>`);return}
+  if(!G.dead[t]){G.dead[t]=true;any=true;L(`${by} убил ${nm(t)} 💀`)}
+ });
+ if(!any)L("этой ночью никто не погиб");
+ G.stage="day";G.votes={};G.night={};saveG();render();
+}
+function endVote(skip){
+ const a=aliveIds();let max=0;a.forEach(i=>max=Math.max(max,G.votes[i]||0));
+ const top=a.filter(i=>(G.votes[i]||0)===max),D=x=>G.log.push(`День ${G.round}: ${x}`);
+ if(skip||max===0)D("никто не изгнан");
+ else if(top.length>1)D(`ничья (${top.map(i=>esc(nameOf(i))).join(", ")}) — по ${max} гол., никто не изгнан`);
+ else{G.dead[top[0]]=true;D(`изгнан <b>${esc(nameOf(top[0]))}</b> (${max} гол.) 💀`)}
+ G.round++;G.stage="night";G.votes={};saveG();render();
+}
+
+render();
+</script>
+</body>
+</html>

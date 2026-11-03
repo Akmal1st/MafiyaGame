@@ -200,18 +200,31 @@ const hostOps={
 
 // ----- player side -----
 let pending=null; // {type, resolve}
-function ensurePeer(){
+// Players pick their own random peer id: asking the public server for one (HTTP /peerjs/id)
+// fails on some mobile networks, while the host (who always uses a fixed id) connects fine.
+const randomPeerId=()=>PEER_PREFIX+"p-"+Array.from(crypto.getRandomValues(new Uint8Array(10)),b=>b.toString(16).padStart(2,"0")).join("");
+function openPlayerPeer(){
  if(peer&&!peer.destroyed&&peer.open)return Promise.resolve(peer);
- if(peer&&!peer.destroyed&&peer.disconnected){peer.reconnect()}
- else if(!peer||peer.destroyed){peer=new Peer(PEER_OPTS);peer.on("disconnected",()=>setTimeout(()=>{if(peer&&!peer.destroyed&&peer.disconnected)peer.reconnect()},2000))}
- const p=peer;
+ if(peer){try{peer.destroy()}catch{}peer=null}
+ const p=new Peer(randomPeerId(),PEER_OPTS);
+ peer=p;
+ p.on("disconnected",()=>setTimeout(()=>{if(!p.destroyed&&p.disconnected)p.reconnect()},2000));
  return new Promise((res,rej)=>{
-  const t=setTimeout(()=>{cleanup();rej(new Error("Нет связи с сетью. Проверьте интернет."))},12000);
+  const fail=type=>{cleanup();if(peer===p)peer=null;try{p.destroy()}catch{};const e=new Error(type);e.type=type;rej(e)};
+  const t=setTimeout(()=>fail("timeout"),15000);
   const onOpen=()=>{cleanup();res(p)};
-  const onErr=e=>{if(["network","server-error","browser-incompatible","socket-error"].includes(e.type)){cleanup();rej(new Error(e.type==="browser-incompatible"?"Браузер не поддерживается":"Нет связи с сетью. Проверьте интернет."))}};
+  const onErr=e=>{if(["network","server-error","browser-incompatible","socket-error","socket-closed","unavailable-id"].includes(e.type))fail(e.type)};
   const cleanup=()=>{clearTimeout(t);p.off("open",onOpen);p.off("error",onErr)};
   p.on("open",onOpen);p.on("error",onErr);
  });
+}
+async function ensurePeer(){
+ let last;
+ for(let i=0;i<3;i++){
+  try{return await openPlayerPeer()}
+  catch(e){last=e;if(e.type==="browser-incompatible")break;await new Promise(r=>setTimeout(r,1500))}
+ }
+ throw new Error(last&&last.type==="browser-incompatible"?"Браузер не поддерживается — откройте в Chrome или Safari":`Нет связи с сетью. Проверьте интернет и попробуйте ещё раз. (${last?last.type:"?"})`);
 }
 async function connectToHost(code){
  const p=await ensurePeer();

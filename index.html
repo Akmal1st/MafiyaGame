@@ -64,6 +64,7 @@ a{color:var(--mut)}
 <script src="i18n.js"></script>
 <script src="roles.js"></script>
 <script src="room.js"></script>
+<script src="bots.js"></script>
 <script>
 const {R,ORDER,MIN_PLAYERS,composition,isMafia}=window.MafiaRoles;
 const {t,roleName,roleDesc,errText}=window.I18N;
@@ -135,6 +136,7 @@ function connectBroker(url){
  });
 }
 function stopNet(clearRoom){
+ clearBotTimers();
  clearInterval(heartbeat);heartbeat=null;
  if(clearRoom&&HR)clients.forEach(c=>{try{c.publish(TOPIC+HR.code+"/k","",{retain:true,qos:1})}catch{}});
  const old=clients;clients=[];setTimeout(()=>old.forEach(c=>{try{c.end(true)}catch{}}),clearRoom?800:0);
@@ -166,11 +168,33 @@ function hostBroadcast(){
  const st=rs.publicState(HR);
  conns.forEach(c=>{if(c.playerId)sendTo(c,{t:"sync",state:st,secret:rs.secretFor(HR,c.playerId)})});
  onHostState(rs.hostView(HR));render();
+ scheduleBots();
+}
+// ----- bots (run here, on the host's device) -----
+const botTimers=new Map();let botStage="";
+function clearBotTimers(){botTimers.forEach(clearTimeout);botTimers.clear()}
+// Each living bot makes its move a few seconds into the night / day, like a person would.
+function scheduleBots(){
+ if(!HR||!HR.started||HR.game.winner)return clearBotTimers();
+ const sk=HR.game.round+":"+HR.game.stage;
+ if(sk!==botStage){clearBotTimers();botStage=sk}
+ HR.players.forEach(p=>{
+  if(!p.bot||HR.game.dead[p.id])return;
+  Object.keys(rs.actionsFor(HR,p.id)).forEach(kind=>{
+   const key=p.id+":"+kind;
+   if(botTimers.has(key)||(HR.picks[p.id]&&HR.picks[p.id][kind]!==undefined))return;
+   const day=kind==="vote",delay=MafiaBots.urgent(rs,HR,p.id,kind)?1500+Math.random()*1500:day?5000+Math.random()*9000:1500+Math.random()*5000;
+   botTimers.set(key,setTimeout(()=>{
+    if(!HR||HR.game.round+":"+HR.game.stage!==sk)return;
+    try{const tg=MafiaBots.decide(rs,HR,p.id,kind);if(tg!=null){rs.setPick(HR,p.id,kind,tg);hostBroadcast()}}catch(e){console.warn(e)}
+   },delay));
+  });
+ });
 }
 function refreshConnected(){
  const now=Date.now();let changed=false;
  HR.players.forEach(p=>{
-  const on=[...conns.values()].some(c=>c.playerId===p.id&&now-c.seen<ALIVE_MS);
+  const on=!!p.bot||[...conns.values()].some(c=>c.playerId===p.id&&now-c.seen<ALIVE_MS);
   if(p.connected!==on){p.connected=on;changed=true}
  });
  return changed;
@@ -273,6 +297,7 @@ const hostOps={
  },
  "host:start"(){rs.start(HR);hostBroadcast();return {ok:true,state:rs.hostView(HR)}},
  "host:game"(d){rs.updateGame(HR,d.game);hostBroadcast();return {ok:true}},
+ "host:addbot"(){rs.addBot(HR);hostBroadcast();return {ok:true}},
  "host:reset"(){rs.reset(HR);hostBroadcast();return {ok:true,state:rs.hostView(HR)}}
 };
 
@@ -555,12 +580,14 @@ function hostLobby(st){
  <div class="card"><b>${t("players_n",N)}</b>${N?playerList(st,{kick:true}):`<p class="sub" style="margin:10px 0 0">${t("nobody_yet",MIN_PLAYERS)}</p>`}</div>
  <div class="card"><b>${t("roles_in_game")}</b>${ok?`<div class="chips mt">${compChips(composition(N))}</div>`:`<p class="sub" style="margin:10px 0 0">${t("need_more",MIN_PLAYERS-N)}</p>`}</div>
  <div class="err">${esc(V.err)}</div>
+ <div class="card"><button class="sec big" id="addbot">${t("add_bot")}</button><p class="sub" style="margin:8px 0 0">${t("bots_hint")}</p></div>
  <button class="big" id="start" ${ok?"":"disabled"}>${t("start")}</button>
  <button class="sec big mt" id="close">${t("close_room")}</button>`;
 }
 bind.host=()=>{
  const st=V.state;if(!st)return;
  if(st.started)return bindHostGame(st);
+ $("addbot").onclick=async()=>{const r=await emit("host:addbot",{});if(!r.ok){V.err=errText(r);render()}};
  const link=inviteLink(st.code);
  $("copy").onclick=async e=>{
   try{await navigator.clipboard.writeText(link);e.target.textContent=t("copied")}
@@ -619,7 +646,7 @@ function hostGame(st){
   const who=k=>{const l=picks.filter(x=>x.kind===k);return `<div class="picks">${l.length?l.map(x=>`📱 ${esc(nameOf(x.id))} → <b>${esc(nameOf(x.target))}</b>`).join(" · "):t("not_picked_yet")}</div>`};
   const f=(k,l,s)=>s?`<label class="fl">${l}<select data-k="${k}">${opts(G.night[k]??"",rs.phoneChoice(HR,k))}</select></label>${who(k)}`:"";
   const anyMafia=a.some(i=>isMafia(roleOf(i)));
-  const actors=a.filter(i=>Object.keys(rs.actionsFor(HR,i)).length),done=actors.filter(i=>picks.some(x=>x.id===i));
+  const actors=a.filter(i=>Object.keys(rs.actionsFor(HR,i)).length),done=actors.filter(i=>Object.keys(rs.actionsFor(HR,i)).every(k=>picks.some(x=>x.id===i&&x.kind===k)));
   h+=`<div class="card"><b>${t("night_actions")}</b><div class="sub" style="text-align:left;margin:4px 0 0">${t("night_progress",done.length,actors.length)}</div>`
    +f("dn",t("f_dn"),aliveRole("don")!==undefined)
    +f("mk",t("f_mk"),anyMafia)

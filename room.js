@@ -10,6 +10,9 @@ const MAX_NAME = 20;
 const MAX_ROOMS = 2000;
 const ROOM_TTL_MS = 6 * 60 * 60 * 1000; // idle rooms are removed after 6 hours
 
+const BOT_NAMES = ["Aziz", "Dilnoza", "Jasur", "Malika", "Bobur", "Nilufar", "Sardor", "Zarina", "Timur", "Lola",
+  "Rustam", "Kamola", "Otabek", "Sevara", "Farrux", "Gulnora", "Shoxrux", "Madina", "Ulug'bek", "Nodira"];
+
 class GameError extends Error {
   constructor(code, message) { super(message); this.code = code; }
 }
@@ -39,6 +42,7 @@ function clearPlay(room) {
   room.notes = {};        // playerId -> [private results]
   room.selfHealUsed = {}; // healer id -> true once they healed themselves
   room.lastBlock = null;  // last night's mistress target (can't repeat)
+  room.lastVotes = {};    // voterId -> targetId from the previous day (bots use it as a clue)
 }
 
 class RoomStore {
@@ -61,7 +65,7 @@ class RoomStore {
       started: false,
       roles: {}, // playerId -> role key
       game: { stage: "lobby", round: 0, dead: {}, winner: "" },
-      picks: {}, notes: {}, selfHealUsed: {}, lastBlock: null,
+      picks: {}, notes: {}, selfHealUsed: {}, lastBlock: null, lastVotes: {},
       nextId: 1,
       touched: this.now()
     };
@@ -78,6 +82,18 @@ class RoomStore {
 
   checkHost(room, hostToken) {
     if (!hostToken || hostToken !== room.hostToken) throw new GameError("not_host", "Только ведущий может это сделать");
+  }
+
+  // Bots are players run by the host's browser (see bots.js).
+  addBot(room) {
+    if (room.started) throw new GameError("started", "Игра уже началась");
+    if (room.players.length >= MAX_PLAYERS) throw new GameError("full", "Комната заполнена");
+    const taken = new Set(room.players.map(p => p.name.toLowerCase()));
+    let name = BOT_NAMES.map(n => "🤖 " + n).find(n => !taken.has(n.toLowerCase()));
+    for (let i = 2; !name; i++) name = BOT_NAMES.map(n => `🤖 ${n} ${i}`).find(n => !taken.has(n.toLowerCase()));
+    const player = { id: room.nextId++, token: token(), name, connected: true, bot: true };
+    room.players.push(player);
+    return player;
   }
 
   join(code, rawName) {
@@ -139,7 +155,13 @@ class RoomStore {
       winner: typeof g.winner === "string" ? g.winner.slice(0, 80) : ""
     };
     // A new night or day starts with empty choices.
-    if (prev.stage !== room.game.stage || prev.round !== room.game.round) room.picks = {};
+    if (prev.stage !== room.game.stage || prev.round !== room.game.round) {
+      if (prev.stage === "day") {
+        room.lastVotes = {};
+        Object.keys(room.picks).forEach(id => { if (room.picks[id].vote !== undefined) room.lastVotes[id] = room.picks[id].vote; });
+      }
+      room.picks = {};
+    }
   }
 
   // ----- actions players choose on their phones -----
@@ -223,7 +245,7 @@ class RoomStore {
       started: room.started,
       hostConnected: room.hostConnected,
       minPlayers: MIN_PLAYERS,
-      players: room.players.map(p => ({ id: p.id, name: p.name, connected: p.connected, dead: !!room.game.dead[p.id] })),
+      players: room.players.map(p => ({ id: p.id, name: p.name, connected: p.connected, dead: !!room.game.dead[p.id], bot: !!p.bot })),
       game: { stage: room.game.stage, round: room.game.round, winner: room.game.winner }
     };
   }
@@ -265,8 +287,8 @@ class RoomStore {
 // Restore a room saved by the host (e.g. after a page reload).
 RoomStore.prototype.restore = function (saved) {
   if (!saved || typeof saved.code !== "string" || !Array.isArray(saved.players)) return null;
-  saved.players.forEach(p => { p.connected = false; });
-  ["picks", "notes", "selfHealUsed"].forEach(k => { if (!saved[k] || typeof saved[k] !== "object") saved[k] = {}; });
+  saved.players.forEach(p => { p.connected = !!p.bot; });
+  ["picks", "notes", "selfHealUsed", "lastVotes"].forEach(k => { if (!saved[k] || typeof saved[k] !== "object") saved[k] = {}; });
   if (saved.lastBlock === undefined) saved.lastBlock = null;
   saved.touched = this.now();
   this.rooms.set(saved.code, saved);

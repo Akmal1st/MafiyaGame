@@ -29,7 +29,13 @@ Bepul GitHub hisobida Pages faqat **public** repolarda ishlaydi.
    - host har bir tanlovni jonli ko'radi («📱 Ism → Nishon»), ular kecha formasiga va ovozlar soniga o'zi tushadi, host qo'lda o'zgartira oladi;
    - detektiv va donning tekshiruv natijasi ertalab faqat ularning telefoniga keladi;
    - doktor o'zini faqat bir marta davolay oladi, ma'shuqa bir odamni ketma-ket ikki kecha tanlay olmaydi.
-6. Sahifa yangilansa, o'yinchi ham, host ham avtomatik qaytadi (`localStorage`).
+6. **Botlar.** Lobbida host «🤖 Bot qo'shish» bilan bot qo'shadi (odam yetmasa yoki sinash uchun). Botlar host telefonida ishlaydi va o'zi o'ynaydi:
+   - mafiya botlari donning (yoki jamoadoshning) tanloviga qo'shiladi, o'z jamoasiga hujum qilmaydi, don topgan detektivni yoki kechagi kunda mafiyaga ovoz berganlarni nishonga oladi;
+   - detektiv va don botlari tekshirilmagan odamlarni tekshiradi va natijani eslab qoladi; detektiv topgan mafiyaga ovoz beradi;
+   - doktor ko'p ovoz olgan odamni himoya qiladi, o'zini bir marta davolashi mumkin;
+   - kunduzi botlar aniq yetakchiga qo'shiladi, mafiya botlari esa ko'pchilikka qo'shilib o'zini yashiradi;
+   - botlar odamga o'xshab bir necha soniya o'ylab yuradi.
+7. Sahifa yangilansa, o'yinchi ham, host ham avtomatik qaytadi (`localStorage`).
 
 ### Texnik tomoni
 
@@ -53,6 +59,7 @@ npm test    # o'yin mantig'i testlari
 | `index.html` | Onlayn o'yin: bosh sahifa, o'yinchi va host ekranlari, MQTT tarmoq qismi |
 | `room.js` | Xona qoidalari: qo'shilish, rollar, kim nimani ko'rishi (hostda ishlaydi) |
 | `roles.js` | Rollar va tarkib |
+| `bots.js` | Botlar «miyasi»: rolga qarab tanlov va ovoz |
 | `i18n.js` | O'zbekcha va ruscha matnlar (`t(kalit)`) |
 | `offline.html` | Asl bitta telefonli versiya |
 | `vendor/` | mqtt.js 5.10.4 va qrcode-generator 1.4.4 (CDN'ga bog'liq bo'lmaslik uchun) |

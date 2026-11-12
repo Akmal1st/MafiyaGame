@@ -254,7 +254,7 @@ function scheduleBots(){
     try{
      const tg=MafiaBots.decide(rs,HR,p.id,kind);
      if(tg!=null){rs.setPick(HR,p.id,kind,tg);hostBroadcast()}
-     else if(kind==="jd")setTimeout(()=>{if(botStage===sk)botTimers.delete(key)},3000); // the judge looks again later
+     else if(kind==="jd"||kind==="vote")setTimeout(()=>{if(botStage===sk){botTimers.delete(key);scheduleBots()}},3000); // looks again later (a bot that held back its vote, the judge)
     }catch(e){console.warn(e)}
    },delay));
   });

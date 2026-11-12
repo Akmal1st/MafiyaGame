@@ -251,11 +251,17 @@ class RoomStore {
     if (!room.started || room.game.stage !== "night" || room.game.winner) return;
     const R0 = room.game.round, nm = id => this.name(room, id);
     const L = (k, ...a) => this._log(room, "lg_night", R0, k, ...a);
-    const pick = k => { const v = choose(k); return v !== null && v !== undefined && v !== "" ? Number(v) : this.phoneChoice(room, k); };
+    const forced = k => { const v = choose(k); return v !== null && v !== undefined && v !== "" ? Number(v) : null; };
+    const pick = (k, skip) => { const v = forced(k); return v !== null ? v : this.phoneChoice(room, k, skip); };
     const alive = id => id !== null && !room.game.dead[id];
-    const mk = pick("mk"), mn = pick("mn"), dc = pick("dc"), ms = pick("ms"), dt = pick("dt"), dn = pick("dn");
-    const sn = !room.used.sniper ? pick("sn") : null;
+    const ms = pick("ms");
     const blocked = id => id !== undefined && id !== null && id === ms;
+    // A distracted mafia member does not take part in the kill; the others still decide.
+    // If no other mafia member is left, there is no mafia kill tonight.
+    const mk = pick("mk", ms);
+    if (mk === null && ms !== null && isMafia(room.roles[ms]) && !this.aliveIds(room).some(id => isMafia(room.roles[id]) && id !== ms)) L("lg_maf_blocked");
+    const mn = pick("mn"), dc = pick("dc"), dt = pick("dt"), dn = pick("dn");
+    const sn = !room.used.sniper ? pick("sn") : null;
     if (ms !== null) L("lg_blocked", nm(ms));
     room.lastBlock = ms;
     let saved = null;
@@ -281,9 +287,10 @@ class RoomStore {
     [["mk", mk], ["mn", mn], ["sn", sn]].forEach(([kind, tg]) => {
       if (tg === null || !alive(tg)) return;
       const by = KILLERS[kind];
-      if (kind === "sn") room.used.sniper = true;
       if (kind === "mn" && blocked(this.aliveWith(room, "man"))) { L("lg_man_blocked"); return; }
+      // A distracted sniper keeps the bullet for another night.
       if (kind === "sn" && blocked(this.aliveWith(room, "sn"))) { L("lg_sn_blocked"); return; }
+      if (kind === "sn") room.used.sniper = true;
       if (tg === saved) { L("lg_saved", by, nm(tg)); return; }
       if (room.roles[tg] === "lk" && !room.used.lucky) { room.used.lucky = true; L("lg_lucky", by, nm(tg)); return; }
       room.game.dead[tg] = true; died.push(tg); L("lg_killed", by, nm(tg));
@@ -414,9 +421,9 @@ class RoomStore {
 
   // The target chosen on phones for a night action (null if nobody chose).
   // For the mafia kill the Don decides; otherwise the most popular choice wins.
-  phoneChoice(room, kind) {
+  phoneChoice(room, kind, skip = null) {
     const alive = id => !room.game.dead[id];
-    const pickers = Object.keys(room.picks).map(Number).filter(id => alive(id) && room.picks[id][kind] !== undefined);
+    const pickers = Object.keys(room.picks).map(Number).filter(id => alive(id) && id !== skip && room.picks[id][kind] !== undefined);
     if (!pickers.length) return null;
     if (kind === "mk") {
       const don = pickers.find(id => room.roles[id] === "don");

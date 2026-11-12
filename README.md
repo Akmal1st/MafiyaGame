@@ -33,7 +33,7 @@ Bepul GitHub hisobida Pages faqat **public** repolarda ishlaydi.
    - mafiya botlari donning (yoki jamoadoshning) tanloviga qo'shiladi, o'z jamoasiga hujum qilmaydi, don topgan detektivni yoki kechagi kunda mafiyaga ovoz berganlarni nishonga oladi;
    - detektiv va don botlari tekshirilmagan odamlarni tekshiradi va natijani eslab qoladi; detektiv topgan mafiyaga ovoz beradi;
    - doktor ko'p ovoz olgan odamni himoya qiladi, o'zini bir marta davolashi mumkin;
-   - kunduzi botlar aniq yetakchiga qo'shiladi, mafiya botlari esa ko'pchilikka qo'shilib o'zini yashiradi;
+   - kunduzi botlar kechasi o'ldirilganlar kecha kimga ovoz berganini hisobga oladi (qotil o'zini fosh qilganlarni o'ldiradi), so'ng aniq yetakchiga qo'shiladi; mafiya botlari esa ko'pchilikka qo'shilib o'zini yashiradi;
    - botlar odamga o'xshab bir necha soniya o'ylab yuradi.
 7. **Taymer.** Host kunduzi muhokama (1/2/3 daqiqa) yoki nutq (30/60 soniya), kechasi 30/60 soniya taymer qo'yadi. Taymer hamma telefonlarda ko'rinadi, oxirgi 10 soniyada va tugaganda signal chaladi.
 8. **Ovozli boshlovchi.** Host telefoni «Shahar uxlaydi», «Shahar uyg'onadi, bu kecha o'ldirildi: …» kabi gaplarni ovoz chiqarib aytadi. Telefonda o'zbekcha ovoz bo'lmasa, ruscha gapiradi. Ovoz va signallarni o'chirish mumkin.

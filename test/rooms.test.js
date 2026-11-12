@@ -71,7 +71,7 @@ test("secrets: mafia see team, assistant sees detective, civilians see nothing",
   assert.deepStrictEqual(nurse.knows, [{ name: nameOf(idOf("doc")), role: "doc" }]);
 
   const civ = s.secretFor(room, idOf("civ"));
-  assert.deepStrictEqual(civ, { role: "civ", team: [], knows: [], actions: {}, picks: {}, notes: [] });
+  assert.deepStrictEqual(civ, { role: "civ", team: [], knows: [], actions: {}, picks: {}, notes: [], nudge: 0 });
 });
 
 test("public state never contains roles or tokens", () => {

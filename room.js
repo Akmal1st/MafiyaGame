@@ -46,6 +46,9 @@ function clearPlay(room) {
   room.used = { sniper: false, judge: false, lucky: false }; // one-time abilities
   room.log = [];          // host-only history: [stageKey, round, textKey, ...args]
   room.chat = [];         // chat of players who are out: {id, name, text}
+  room.history = [];      // public: what happened each night / day (the news, kept for the whole game)
+  room.nudges = {};       // playerId -> how many reminders the host sent ("your turn")
+  room.notice = null;     // last announcement from the host: {id, text}
 }
 
 const DEFAULT_SETTINGS = () => ({
@@ -82,6 +85,7 @@ class RoomStore {
       hostPlayerId: null,
       picks: {}, notes: {}, selfHealUsed: {}, lastBlock: null, lastVotes: {},
       used: { sniper: false, judge: false, lucky: false }, log: [], chat: [],
+      history: [], nudges: {}, notice: null, noticeSeq: 0,
       nextId: 1,
       touched: this.now()
     };
@@ -223,6 +227,11 @@ class RoomStore {
   }
 
   _log(room, ...entry) { room.log.push(entry); if (room.log.length > 500) room.log.shift(); }
+  _history(room, news) {
+    if (!Array.isArray(room.history)) room.history = [];
+    room.history.push(JSON.parse(JSON.stringify(news)));
+    if (room.history.length > 100) room.history.shift();
+  }
 
   _advance(room, stage, round) {
     const prev = room.game;
@@ -242,6 +251,7 @@ class RoomStore {
   setDead(room, id, dead) {
     if (!room.players.some(p => p.id === id)) return;
     if (dead) room.game.dead[id] = true; else delete room.game.dead[id];
+    this._history(room, { k: "manual", r: room.game.round, s: room.game.stage, id, dead: !!dead });
     this._log(room, room.game.stage === "night" ? "lg_night" : "lg_day", room.game.round, "lg_manual", this.name(room, id), !!dead);
     room.game.winner = this.winner(room);
   }
@@ -297,6 +307,7 @@ class RoomStore {
     });
     if (!died.length) L("lg_nobody_died");
     room.game.news = { k: "night", r: R0, died };
+    this._history(room, room.game.news);
     this._advance(room, "day", R0);
   }
 
@@ -319,6 +330,7 @@ class RoomStore {
       else { out = top[0]; room.game.dead[out] = true; D("lg_exiled", this.name(room, out), max); }
     }
     room.game.news = { k: "day", r: R0, out, tie, pardoned };
+    this._history(room, room.game.news);
     this._advance(room, "night", R0 + 1);
   }
 
@@ -329,6 +341,41 @@ class RoomStore {
     room.game.timer = { label: String(label).slice(0, 10), ends: this.now() + seconds * 1000, total: seconds };
   }
   stopTimer(room) { room.game.timer = null; }
+  // Adds time to the running timer (or starts one for the current phase).
+  extendTimer(room, seconds) {
+    if (!room.started || room.game.winner) return;
+    seconds = Math.max(1, Math.min(600, Math.floor(Number(seconds)) || 30));
+    const tm = room.game.timer;
+    if (!tm) return this.startTimer(room, room.game.stage, seconds);
+    const left = Math.max(0, tm.ends - this.now());
+    tm.ends = this.now() + Math.min(3600 * 1000, left + seconds * 1000);
+    tm.total = Math.max(tm.total, Math.ceil((tm.ends - this.now()) / 1000));
+  }
+
+  // ----- host helpers: who is still choosing, reminders, announcements -----
+
+  // Living players who still have to choose something in this phase.
+  waitingFor(room) {
+    if (!room.started || room.game.winner) return [];
+    const night = room.game.stage === "night";
+    return this.aliveIds(room).filter(id => {
+      const need = night ? this.requiredActions(room, id) : ["vote"];
+      return need.some(k => !(room.picks[id] && room.picks[id][k] !== undefined));
+    });
+  }
+  // Reminds everyone who still has to choose (their phone beeps and vibrates). Returns how many.
+  nudge(room) {
+    if (!room.nudges) room.nudges = {};
+    const ids = this.waitingFor(room).filter(id => { const p = room.players.find(x => x.id === id); return p && !p.bot && !p.host; });
+    ids.forEach(id => { room.nudges[id] = (room.nudges[id] || 0) + 1; });
+    return ids.length;
+  }
+  // A short message from the host shown on every phone; empty text removes it.
+  announce(room, text) {
+    text = String(text || "").replace(/[\u0000-\u001f\u007f]/g, " ").trim().slice(0, 200);
+    room.noticeSeq = (room.noticeSeq || 0) + 1;
+    room.notice = text ? { id: room.noticeSeq, text } : null;
+  }
   timerState(room) {
     const tm = room.game.timer;
     return tm ? { label: tm.label, left: Math.max(0, tm.ends - this.now()), total: tm.total } : null;
@@ -479,7 +526,9 @@ class RoomStore {
         if (room.started && (dead || room.game.winner) && reveal) o.role = room.roles[p.id];
         return o;
       }),
-      game: { stage: room.game.stage, round: room.game.round, winner: room.game.winner, news: room.game.news || null, timer: this.timerState(room) }
+      game: { stage: room.game.stage, round: room.game.round, winner: room.game.winner, news: room.game.news || null, timer: this.timerState(room) },
+      history: (room.history || []).slice(-40),
+      notice: room.notice || null
     };
   }
 
@@ -501,6 +550,7 @@ class RoomStore {
         .filter(p => p.id !== playerId && isMafia(room.roles[p.id]) && !room.game.dead[p.id] && room.picks[p.id] && room.picks[p.id].mk !== undefined)
         .map(p => ({ id: p.id, target: room.picks[p.id].mk }));
     if (this.canChat(room, playerId)) out.chat = room.chat.slice();
+    out.nudge = (room.nudges && room.nudges[playerId]) || 0;
     return out;
   }
 
@@ -513,6 +563,7 @@ class RoomStore {
       chat: room.chat.slice(),
       used: { ...room.used },
       hostPlayerId: room.hostPlayerId,
+      waiting: this.waitingFor(room),
       fullSettings: JSON.parse(JSON.stringify(room.settings))
     };
   }
@@ -532,6 +583,9 @@ RoomStore.prototype.restore = function (saved) {
   if (!saved.used) saved.used = { sniper: false, judge: false, lucky: false };
   if (!Array.isArray(saved.log)) saved.log = [];
   if (!Array.isArray(saved.chat)) saved.chat = [];
+  if (!Array.isArray(saved.history)) saved.history = [];
+  if (!saved.nudges || typeof saved.nudges !== "object") saved.nudges = {};
+  if (saved.notice === undefined) saved.notice = null;
   if (!saved.settings) saved.settings = DEFAULT_SETTINGS();
   if (saved.hostPlayerId === undefined) saved.hostPlayerId = null;
   if (saved.lastBlock === undefined) saved.lastBlock = null;

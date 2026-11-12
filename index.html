@@ -73,17 +73,50 @@ a{color:var(--mut)}
 button.cnt{padding:4px 14px}
 .cntv{display:inline-block;min-width:24px;text-align:center}
 .tbtns{display:flex;flex-wrap:wrap;gap:8px}
+.top{display:flex;align-items:center;gap:8px;margin-bottom:-4px}
+.top .lang{margin:0 0 0 auto}
+.conn{font-size:13px;color:var(--mut);white-space:nowrap}
+.notice{border-color:var(--ac);font-size:16px;line-height:1.4}
+details.card>summary{cursor:pointer;list-style:none}
+details.card>summary::-webkit-details-marker{display:none}
+details.card>summary::after{content:" ▾";color:var(--mut)}
+details.card[open]>summary::after{content:" ▴"}
+details.card[open]>summary{margin-bottom:6px}
+#helpbg{position:fixed;inset:0;z-index:40;background:rgba(0,0,0,.45);opacity:0;pointer-events:none;transition:opacity .25s}
+#helpbg.open{opacity:1;pointer-events:auto}
+#help{position:fixed;left:0;right:0;top:0;z-index:50;max-height:88vh;overflow-y:auto;overscroll-behavior:contain;background:var(--card);color:var(--tx);
+ border-bottom:1px solid var(--ln);border-radius:0 0 20px 20px;box-shadow:0 10px 30px rgba(0,0,0,.35);transform:translateY(-105%);visibility:hidden;
+ transition:transform .28s ease,visibility 0s .28s;padding-top:env(safe-area-inset-top,0px)}
+#help.open{transform:none;visibility:visible;transition:transform .28s ease}
+.hin{max-width:480px;margin:0 auto;padding:14px 16px 6px}
+.hhead{display:flex;justify-content:space-between;align-items:center;font-size:19px}
+.htabs{display:flex;flex-wrap:wrap;gap:6px;margin:12px 0 4px}
+.htabs button{font-size:13px;padding:7px 10px}
+.hbody{font-size:15px;line-height:1.45}
+.hp{font-size:16px;line-height:1.5;margin:12px 0}
+.hsec{font-weight:700;margin:14px 0 6px}
+.hbody .hsec:first-child{margin-top:10px}
+.hl{margin:0;padding-left:20px}.hl li{margin:5px 0}
+.hrole{display:flex;gap:10px;padding:9px 0;border-bottom:1px solid var(--ln)}
+.hrole .re{font-size:28px;line-height:1}
+.hrole .rd{color:var(--mut);font-size:14px;margin-top:3px}
+.hgrip{display:block;width:100%;background:none;padding:12px 0 6px;border-radius:0}
+.hgrip::before{content:"";display:block;margin:0 auto;width:44px;height:5px;border-radius:3px;background:var(--ln)}
+.toast{position:fixed;left:50%;bottom:calc(18px + env(safe-area-inset-bottom,0px));transform:translate(-50%,20px);z-index:60;max-width:min(440px,calc(100vw - 32px));
+ background:var(--tx);color:var(--bg);padding:11px 16px;border-radius:12px;font-size:15px;box-shadow:0 6px 20px rgba(0,0,0,.3);opacity:0;pointer-events:none;transition:opacity .2s,transform .2s}
+.toast.on{opacity:1;transform:translate(-50%,0)}
+@media(prefers-reduced-motion:reduce){#help,#helpbg,.toast{transition:none}}
 </style>
 </head>
 <body>
 <div id="app"></div>
 <script src="vendor/mqtt-5.10.4.min.js"></script>
 <script src="vendor/qrcode-generator-1.4.4.js"></script>
-<script src="i18n.js?v=8"></script>
-<script src="roles.js?v=8"></script>
-<script src="room.js?v=8"></script>
-<script src="bots.js?v=8"></script>
-<script src="net.js?v=8"></script>
-<script src="app.js?v=8"></script>
+<script src="i18n.js?v=9"></script>
+<script src="roles.js?v=9"></script>
+<script src="room.js?v=9"></script>
+<script src="bots.js?v=9"></script>
+<script src="net.js?v=9"></script>
+<script src="app.js?v=9"></script>
 </body>
 </html>

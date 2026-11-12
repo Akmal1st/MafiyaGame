@@ -1,6 +1,6 @@
 // Network first so every phone runs the same version; the saved copy is used when there is no internet.
-const CACHE = "mafia-v8";
-const FILES = ["./", "index.html", "offline.html", "i18n.js?v=8", "roles.js?v=8", "room.js?v=8", "bots.js?v=8", "net.js?v=8", "app.js?v=8",
+const CACHE = "mafia-v9";
+const FILES = ["./", "index.html", "offline.html", "i18n.js?v=9", "roles.js?v=9", "room.js?v=9", "bots.js?v=9", "net.js?v=9", "app.js?v=9",
   "vendor/mqtt-5.10.4.min.js", "vendor/qrcode-generator-1.4.4.js", "manifest.webmanifest", "icons/icon-192.png", "icons/icon-512.png"];
 self.addEventListener("install", e => { e.waitUntil(caches.open(CACHE).then(c => c.addAll(FILES)).then(() => self.skipWaiting())); });
 self.addEventListener("activate", e => {

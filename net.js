@@ -22,7 +22,7 @@ const BASE=location.origin+location.pathname.replace(/index\.html$/,"");
 let V={screen:"loading",err:"",state:null,secret:null,showRole:false,me:null,session:store.get(SESSION_KEY)};
 // Host-only UI state for the current deal: manual night overrides, vote corrections, toggles.
 let G=null;
-const prefs=Object.assign({voice:true,sound:true},store.get("mafia:prefs")||{});
+const prefs=Object.assign({voice:true,sound:true,vibe:true},store.get("mafia:prefs")||{});
 const savePrefs=()=>store.set("mafia:prefs",prefs);
 
 function inviteLink(code){return `${BASE}?room=${code}`}
@@ -228,7 +228,10 @@ const hostOps={
  "host:dead"(d){rs.setDead(HR,Number(d.id),!!d.dead);hostBroadcast();return ok()},
  "host:night"(){rs.resolveNight(HR,k=>G&&G.night[k]!==undefined&&G.night[k]!==""?G.night[k]:null);if(G){G.night={};G.votes={}}saveG();hostBroadcast();return ok()},
  "host:vote"(d){rs.resolveVote(HR,id=>totalVotes(id),!!d.skip);if(G)G.votes={};saveG();hostBroadcast();return ok()},
- "host:timer"(d){if(d.seconds)rs.startTimer(HR,d.label||"disc",d.seconds);else rs.stopTimer(HR);hostBroadcast();return ok()}
+ "host:timer"(d){if(d.seconds)rs.startTimer(HR,d.label||"disc",d.seconds);else rs.stopTimer(HR);hostBroadcast();return ok()},
+ "host:extend"(d){rs.extendTimer(HR,d.seconds||30);timerBeeped="";hostBroadcast();return ok()},
+ "host:nudge"(){const n=rs.nudge(HR);hostBroadcast();return ok({n})},
+ "host:notice"(d){rs.announce(HR,d.text);hostBroadcast();return ok()}
 };
 // Votes = votes from phones + the host's manual correction.
 function totalVotes(i){return Math.max(0,(rs.voteTally(HR)[i]||0)+((G&&G.votes[i])||0))}
@@ -287,11 +290,18 @@ function tickTimers(){
  const left=Math.max(0,timerEnd-Date.now());
  document.querySelectorAll(".tmr-val").forEach(el=>{el.textContent=fmt(left)});
  document.querySelectorAll(".tmr-bar").forEach(el=>{el.style.width=(100*left/((el.dataset.total||1)*1000))+"%"});
- if(left===0&&timerBeeped!==timerKey){timerBeeped=timerKey;beep(3);if(navigator.vibrate)navigator.vibrate([200,100,200])}
+ if(left===0&&timerBeeped!==timerKey){timerBeeped=timerKey;beep(3);vibe([200,100,200])}
  else if(left>0&&left<=10000&&timerBeeped!==timerKey&&timerBeeped!==timerKey+"10"){timerBeeped=timerKey+"10";beep(1)}
 }
 
-// ---------- sounds ----------
+// ---------- sounds, vibration, pop-up messages ----------
+function vibe(p){if(prefs.vibe&&navigator.vibrate)try{navigator.vibrate(p)}catch{}}
+let toastEl=null,toastTm=null;
+function toast(text){
+ if(!toastEl){toastEl=document.createElement("div");toastEl.className="toast";toastEl.setAttribute("role","status");document.body.appendChild(toastEl)}
+ toastEl.textContent=text;toastEl.classList.add("on");
+ clearTimeout(toastTm);toastTm=setTimeout(()=>toastEl.classList.remove("on"),3500);
+}
 let audio=null;
 document.addEventListener("pointerdown",()=>{try{audio=audio||new (window.AudioContext||window.webkitAudioContext)();audio.resume()}catch{}},{passive:true});
 function beep(n=1){
@@ -438,15 +448,22 @@ function onPlayerMessage(msg){
   V.state=msg.state;if(!msg.secret)V.showRole=false;V.secret=msg.secret;
   syncTimer(V.state);
   const g=V.state.game,k=V.state.started?g.round+g.stage+g.winner:"";
-  if(playerPhase&&k!==playerPhase){beep(1);if(navigator.vibrate)navigator.vibrate(200)}
+  if(playerPhase&&k!==playerPhase){beep(1);vibe(200)}
   playerPhase=k;
+  playerAlerts();
   recordPlayerStats();
-  if(!isTyping())render();
+  render();
  }
  else if(msg.t==="kicked"){stopNet();setSession(null);V.screen="kicked";render()}
 }
-// Don't redraw while someone types in the chat box (it would lose focus).
-const isTyping=()=>document.activeElement&&document.activeElement.id==="chatin"&&document.activeElement.value;
+// A new announcement from the host or a reminder ("your turn") makes the phone ring once.
+let seenNotice=null,seenNudge=null;
+function playerAlerts(){
+ const st=V.state,n=st.notice,nid=n?n.id:0,nudge=(V.secret&&V.secret.nudge)||0;
+ if(seenNotice!==null&&nid&&nid!==seenNotice){beep(2);vibe([150,80,150]);toast("📢 "+n.text)}
+ if(seenNudge!==null&&nudge>seenNudge){beep(2);vibe([300,120,300]);toast(t("nudge_got"))}
+ seenNotice=nid;seenNudge=nudge;
+}
 function startPlayerHeartbeat(){
  clearInterval(heartbeat);
  heartbeat=setInterval(()=>{

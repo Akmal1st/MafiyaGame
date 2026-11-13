@@ -132,3 +132,52 @@ test("host can join as a player", () => {
   s.setHostPlayer(room, null);
   assert.strictEqual(room.players.length, 4);
 });
+
+test("auto composition keeps the killers to about a third of the table", () => {
+  assert.strictEqual(composition(7).man, 0, "no maniac in small games");
+  assert.strictEqual(composition(10).man, 1);
+  assert.strictEqual(composition(20).mafia + composition(20).don, 5);
+  for (let N = 5; N <= 30; N++) {
+    const c = composition(N), killers = c.mafia + c.don + c.man;
+    assert.ok(killers * 3 <= N + 1, "N=" + N + " killers=" + killers);
+  }
+});
+
+test("mistress: a distracted mafia member is left out of the kill; the last one can't kill", () => {
+  const { s, room, one, civs } = setup(8, { settings: { mode: "custom", counts: { mafia: 1, don: 1, det: 1, doc: 1, mis: 1 } } });
+  const [c1, c2] = civs();
+  const don = one("don"), maf = one("mafia");
+  s.setPick(room, don, "mk", c1);
+  s.setPick(room, maf, "mk", c2);
+  s.setPick(room, one("mis"), "ms", don);
+  s.resolveNight(room);
+  assert.ok(!room.game.dead[c1], "the Don was distracted, his pick does not count");
+  assert.ok(room.game.dead[c2], "the other mafia member still kills");
+  s.resolveVote(room, id => (id === maf ? 5 : 0));
+  assert.ok(room.game.dead[maf]);
+  const c3 = civs()[0];
+  s.setPick(room, don, "mk", c3);
+  s.setPick(room, one("mis"), "ms", one("det") === undefined ? c3 : one("det"));
+  s.resolveNight(room);
+  assert.ok(room.game.dead[c3], "mistress on someone else: the kill goes through");
+  s.resolveVote(room, () => 0, true);
+  const c4 = civs()[0];
+  s.setPick(room, don, "mk", c4);
+  s.setPick(room, one("mis"), "ms", don);
+  s.resolveNight(room);
+  assert.ok(!room.game.dead[c4], "the only mafia member was distracted: nobody dies");
+  assert.ok(room.log.some(l => l[2] === "lg_maf_blocked"));
+});
+
+test("a distracted sniper keeps the bullet", () => {
+  const { s, room, one, civs } = setup(9, { settings: { mode: "custom", counts: { mafia: 1, det: 1, doc: 1, mis: 1, sn: 1 } } });
+  const maf = one("mafia");
+  s.setPick(room, one("sn"), "sn", maf);
+  s.setPick(room, one("mis"), "ms", one("sn"));
+  s.resolveNight(room);
+  assert.ok(!room.game.dead[maf]);
+  assert.ok(!room.used.sniper, "bullet not spent");
+  s.resolveVote(room, () => 0, true);
+  assert.ok(s.actionsFor(room, one("sn")).sn, "can shoot again");
+  assert.ok(civs().length);
+});

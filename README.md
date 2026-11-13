@@ -33,7 +33,7 @@ Bepul GitHub hisobida Pages faqat **public** repolarda ishlaydi.
    - mafiya botlari donning (yoki jamoadoshning) tanloviga qo'shiladi, o'z jamoasiga hujum qilmaydi, don topgan detektivni yoki kechagi kunda mafiyaga ovoz berganlarni nishonga oladi;
    - detektiv va don botlari tekshirilmagan odamlarni tekshiradi va natijani eslab qoladi; detektiv topgan mafiyaga ovoz beradi;
    - doktor ko'p ovoz olgan odamni himoya qiladi, o'zini bir marta davolashi mumkin;
-   - kunduzi botlar aniq yetakchiga qo'shiladi, mafiya botlari esa ko'pchilikka qo'shilib o'zini yashiradi;
+   - kunduzi botlar kechasi o'ldirilganlar kecha kimga ovoz berganini hisobga oladi (qotil o'zini fosh qilganlarni o'ldiradi), so'ng aniq yetakchiga qo'shiladi; mafiya botlari esa ko'pchilikka qo'shilib o'zini yashiradi;
    - botlar odamga o'xshab bir necha soniya o'ylab yuradi.
 7. **Taymer.** Host kunduzi muhokama (1/2/3 daqiqa) yoki nutq (30/60 soniya), kechasi 30/60 soniya taymer qo'yadi. Taymer hamma telefonlarda ko'rinadi, oxirgi 10 soniyada va tugaganda signal chaladi.
 8. **Ovozli boshlovchi.** Host telefoni «Shahar uxlaydi», «Shahar uyg'onadi, bu kecha o'ldirildi: …» kabi gaplarni ovoz chiqarib aytadi. Telefonda o'zbekcha ovoz bo'lmasa, ruscha gapiradi. Ovoz va signallarni o'chirish mumkin.
@@ -48,6 +48,10 @@ Bepul GitHub hisobida Pages faqat **public** repolarda ishlaydi.
 14. **Telefonga o'rnatish (PWA).** Bosh sahifadagi «📲 Telefonga o'rnatish» (iPhone'da Safari → «Bosh ekranga qo'shish»). Ilova ikonkasi paydo bo'ladi, oflayn rejim internetsiz ham ochiladi.
 15. **Avtomatik boshlovchi.** Lobbida yoqiladi: kecha va kun vaqti tanlanadi, hamma tanlov qilganda yoki vaqt tugaganda o'yin o'zi keyingi bosqichga o'tadi. «Men ham o'ynayman» ga ism yozilsa, host ham rol oladi va boshqa rollarni ko'rmaydi.
 16. Sahifa yangilansa, o'yinchi ham, host ham avtomatik qaytadi (`localStorage`).
+17. **Yordam paneli.** Har bir ekranning tepasidagi «❓ Yordam» tugmasi yuqoridan tushadigan panelni ochadi: «Hozir» (shu ekranda nima qilish kerak), qoidalar va g'alaba shartlari, barcha rollar (qaysi tomon, necha o'yinchidan qo'shiladi), boshlovchi va o'yinchi uchun yo'riqnoma, til / ovoz / tebranish sozlamalari.
+18. **Boshlovchi uchun:** «⏳ Kutilmoqda» kim hali tanlamaganini ko'rsatadi, «🔔 Eslatish» ularning telefonini jiringlatadi; taymerni «+30 s» bilan uzaytirish; «📢 Hammaga e'lon» har bir telefonda chiqadigan qisqa xabar; o'yinchilar ro'yxatida onlayn soni (📶).
+19. **O'yinchi uchun:** «📰 O'yin tarixi» (har kecha va kunda nima bo'lgani), tepada aloqa ko'rsatkichi, ovoz signali va tebranishni yoqish/o'chirish.
+20. **Ekran yangilanishi.** Ekran butunlay qayta chizilmaydi, faqat o'zgargan qismi yangilanadi: yozilayotgan matn, klaviatura, ochiq ro'yxat, chat va sahifa scroll'i yangilanishda yo'qolmaydi.
 
 ### Texnik tomoni
 

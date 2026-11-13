@@ -21,6 +21,15 @@
     return Object.keys(room.lastVotes || {}).map(Number).filter(v => ids.includes(room.lastVotes[v]));
   }
 
+  // Public clue for the day: players that last night's victims voted against yesterday.
+  function suspects(room) {
+    const n = room.game.news;
+    if (room.game.stage !== "day" || !n || n.k !== "night" || !Array.isArray(n.died)) return [];
+    const out = [];
+    n.died.forEach(v => { const t = (room.lastVotes || {})[v]; if (t !== undefined && !room.game.dead[t] && !out.includes(t)) out.push(t); });
+    return out;
+  }
+
   // Today's vote count from phones and bots.
   function currentTally(room) {
     const t = {};
@@ -112,9 +121,13 @@
         if (lead !== undefined && tally[lead] >= 2) return lead;
         return preferred(options, [options.filter(id => known[id] === undefined)], rnd);
       }
-      // Everyone else: follow the leader (the detective votes first when it has found someone),
-      // sometimes abstain early in the game.
+      // Everyone else reasons from public facts: whoever last night's victims voted against
+      // yesterday is suspicious (the killers silence their accusers). Then follow the leader
+      // (the detective votes first when it has found someone), sometimes abstain early in the game.
+      const sus = suspects(room).filter(id => options.includes(id) && id !== botId);
       const lead = leaders.find(id => options.includes(id));
+      if (lead !== undefined && (sus.includes(lead) || !sus.length || tally[lead] >= 2)) return lead;
+      if (sus.length) return preferred(sus, [sus.filter(id => tally[id])], rnd);
       if (lead !== undefined) return lead;
       if (room.game.round === 1 && rnd() < 0.3) return null;
       return pickRandom(options, rnd);

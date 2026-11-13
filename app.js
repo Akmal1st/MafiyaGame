@@ -1,23 +1,83 @@
 // User interface. State and networking live in net.js.
 
 // ---------- rendering ----------
+// The screen is rebuilt from HTML on every update, then patched into the page (see patch()):
+// only what changed is touched, so typed text, keyboard focus, an open list and scroll positions survive.
+let lastScreen="";
 function render(){
- const off=!net.online&&(V.screen==="host"||V.screen==="player")?`<div class="banner">${t(V.screen==="host"?"banner_host":"banner_player")}</div>`:"";
+ const inGame=V.screen==="host"||V.screen==="player";
+ const off=!net.online&&inGame&&V.state?`<div class="banner">${V.screen==="host"?t("banner_host"):esc(playerBanner())}</div>`:"";
  const screens={loading,home,join,player,host,kicked,stats};
- const y=scrollY;
- const langs=`<div class="lang">${I18N.LANGS.map(l=>`<button data-lang="${l}" class="${I18N.lang===l?"on":""}">${l.toUpperCase()}</button>`).join("")}</div>`;
- app.innerHTML=langs+off+(screens[V.screen]||home)();
+ patch(app,topBar(inGame)+off+(screens[V.screen]||home)());
+ if(lastScreen!==V.screen){lastScreen=V.screen;scrollTo(0,0)}
  app.querySelectorAll("[data-lang]").forEach(b=>b.onclick=()=>{I18N.setLang(b.dataset.lang);V.err="";render()});
+ $("helpbtn").onclick=()=>openHelp("now");
  bind[V.screen]?.();
  bindCommon();
  tickTimers();
- scrollTo(0,y);
+ // Chats: jump to the newest message when one arrives.
+ app.querySelectorAll(".chat").forEach(c=>{const n=c.childElementCount;if(c._n!==n){c._n=n;c.scrollTop=c.scrollHeight}});
+ if(helpOpen)renderHelp();
+}
+function topBar(inGame){
+ const conn=inGame?`<span class="conn" title="${t(net.online?"conn_ok":"conn_wait")}"><span class="dot ${net.online?"":"off"}"></span>${t(net.online?"conn_ok":"conn_wait")}</span>`:"";
+ return `<div class="top"><button class="sec sm" id="helpbtn">❓ ${t("help_btn")}</button>${conn}<div class="lang">${I18N.LANGS.map(l=>`<button data-lang="${l}" class="${I18N.lang===l?"on":""}">${l.toUpperCase()}</button>`).join("")}</div></div>`;
+}
+
+// ----- patching the page instead of replacing it -----
+const nodeKey=n=>n.nodeType===1?(n.id||n.getAttribute("data-key")||""):"";
+const sameKind=(a,b)=>a.nodeType===b.nodeType&&a.nodeName===b.nodeName&&nodeKey(a)===nodeKey(b);
+function patch(el,html){const tp=document.createElement("template");tp.innerHTML=html;patchChildren(el,tp.content)}
+function patchChildren(parent,src){
+ let cur=parent.firstChild;
+ for(const nn of [...src.childNodes]){
+  let m=null;
+  if(cur&&sameKind(cur,nn))m=cur;
+  else if(nodeKey(nn))for(let x=cur;x;x=x.nextSibling)if(sameKind(x,nn)){m=x;break}
+  if(!m){parent.insertBefore(nn,cur);continue}
+  if(m===cur)cur=cur.nextSibling;else parent.insertBefore(m,cur);
+  patchNode(m,nn);
+ }
+ while(cur){const n=cur.nextSibling;parent.removeChild(cur);cur=n}
+}
+function patchNode(a,b){
+ if(a.nodeType!==1){if(a.nodeValue!==b.nodeValue)a.nodeValue=b.nodeValue;return}
+ const focused=a===document.activeElement,tag=a.nodeName;
+ // An open dropdown closes if it is touched; it is updated after the choice.
+ if(tag==="SELECT"&&focused)return;
+ const oldVal=a.getAttribute("value");
+ for(const at of [...a.attributes])if(!b.hasAttribute(at.name)&&!(tag==="DETAILS"&&at.name==="open"))a.removeAttribute(at.name);
+ for(const at of b.attributes)if(a.getAttribute(at.name)!==at.value)a.setAttribute(at.name,at.value);
+ // Handlers are set again by the bind functions after every render.
+ a.onclick=a.onchange=a.onkeydown=a.oninput=null;
+ if(tag==="INPUT"){
+  if(a.type==="checkbox"||a.type==="radio")a.checked=b.hasAttribute("checked");
+  else if(!focused&&b.getAttribute("value")!==oldVal)a.value=b.getAttribute("value")||"";
+  return;
+ }
+ if(tag==="SELECT"){
+  const sel=b.querySelector("option[selected]");
+  patchChildren(a,b);
+  a.value=sel?sel.value:(a.options[0]?a.options[0].value:"");
+  return;
+ }
+ patchChildren(a,b);
 }
 const bind={};
 const sub=(k,...a)=>`<p class="sub" style="text-align:left;margin:6px 0 10px">${t(k,...a)}</p>`;
 
-function loading(){return `<h1>🎭 ${t("mafia")}</h1><p class="sub">${t("connecting")}</p>${V.err?`<p class="err center">${esc(V.err)}</p>`:""}<p class="sub"><a href="#" id="lhome">${t("to_home")}</a></p>`}
-bind.loading=()=>{const l=$("lhome");if(l)l.onclick=e=>{e.preventDefault();goHome()}};
+// Shown while a page connects. A player who can't reach the room sees why, can try again at once or leave.
+function loading(){
+ const pl=V.session?.kind==="player";
+ const err=(pl&&P.code&&linkProblem())||V.err;
+ return `<h1>🎭 ${t("mafia")}</h1>${pl?`<p class="sub">${t("room_n",esc(V.session.code))}</p>`:""}<p class="sub">${t("connecting")}</p>
+ ${err?`<p class="err center">${esc(err)}</p>`:""}
+ ${pl&&err?`<button class="big" id="lretry">${t("retry_now")}</button><p class="sub">${t("retry_auto")}</p>`:""}
+ ${pl?`<button class="sec big mt" id="lhome">${t("leave_wait")}</button>`:`<p class="sub"><a href="#" id="lhome">${t("to_home")}</a></p>`}`}
+bind.loading=()=>{
+ const l=$("lhome");if(l)l.onclick=e=>{e.preventDefault();goHome()};
+ const r=$("lretry");if(r)r.onclick=()=>{r.disabled=true;playerRetry()};
+};
 
 // ---------- home ----------
 let installPrompt=null;
@@ -125,15 +185,29 @@ function timerCard(st){
 // What happened last night / at the last vote, for everyone.
 function newsCard(st){
  const n=st.game.news;if(!n||!st.started||st.game.winner)return "";
- const who=id=>{const p=st.players.find(x=>x.id===id);return p?`<b>${esc(p.name)}</b>${p.role?" "+roleTag(p.role):""}`:"?"};
- let txt;
- if(n.k==="night")txt=n.died.length?t("news_died",n.died.map(who).join(", ")):t("news_nobody");
- else txt=n.pardoned!=null?t("news_pardoned",who(n.pardoned)):n.out!=null?t("news_out",who(n.out)):n.tie?t("news_tie"):t("news_no_exile");
- return `<div class="card news">${n.k==="night"?"🌅":"⚖️"} ${txt}</div>`;
+ return `<div class="card news">${n.k==="night"?"🌅":"⚖️"} ${newsText(n,st)}</div>`;
 }
 function winnerCard(st,extra=""){
  if(!st.game.winner)return "";
  return `<div class="card center" style="border-color:var(--ac)"><b style="font-size:22px">${winText(st.game.winner)}</b>${extra}</div>`;
+}
+// Announcement from the host, on every phone until closed.
+function noticeCard(st){
+ const n=st.notice;if(!n||V.noticeHidden===n.id)return "";
+ return `<div class="card notice" data-key="notice"><div class="row" style="justify-content:space-between;align-items:flex-start"><div><b>${t("notice_title")}</b><div class="mt">${esc(n.text)}</div></div><button class="sec sm" id="ntcx">✕</button></div></div>`;
+}
+function newsText(n,st){
+ const who=id=>{const p=st.players.find(x=>x.id===id);return p?`<b>${esc(p.name)}</b>${p.role?" "+roleTag(p.role):""}`:"?"};
+ if(n.k==="manual")return t(n.dead?"hist_out":"hist_back",who(n.id));
+ if(n.k==="night")return n.died.length?t("news_died",n.died.map(who).join(", ")):t("news_nobody");
+ return n.pardoned!=null?t("news_pardoned",who(n.pardoned)):n.out!=null?t("news_out",who(n.out)):n.tie?t("news_tie"):t("news_no_exile");
+}
+// Everything that happened in this game, newest first (open to everyone).
+function historyCard(st){
+ const h=st.history||[];if(!st.started||!h.length)return "";
+ const stage=x=>t((x.k==="manual"?x.s:x.k==="night"?"night":"day")==="day"?"day_n":"night_n",x.r);
+ return `<details class="card" data-key="history"><summary><b>${t("history_title")}</b> <span class="sub">(${h.length})</span></summary>
+  ${h.slice().reverse().map(x=>`<div class="lg">${stage(x)} · ${newsText(x,st)}</div>`).join("")}</details>`;
 }
 function chatCard(list,canWrite){
  if(!list)return "";
@@ -172,6 +246,7 @@ function playerGame(st,sec,me){
  const vote=sec&&!night&&!over?actionBlocks(sec,true):"";
  return `
   <h1>${stageTitle(st.game)}</h1><p class="sub">${t("room_me",esc(st.code),esc(me?.name||""))}</p>
+  ${noticeCard(st)}
   ${winnerCard(st)}
   ${timerCard(st)}
   ${newsCard(st)}
@@ -179,7 +254,9 @@ function playerGame(st,sec,me){
   ${vote?`<div class="card">${vote}</div>`:""}
   <div class="card center" style="padding:20px 16px">${roleHtml}</div>
   ${sec&&sec.chat?chatCard(sec.chat,true):""}
-  <div class="card"><b>${t("alive_n",st.players.filter(p=>!p.dead).length,N)}</b>${playerList(st,{started:true})}</div>`;
+  <div class="card"><b>${t("alive_n",st.players.filter(p=>!p.dead).length,N)}</b>${playerList(st,{started:true})}</div>
+  ${historyCard(st)}
+  ${V.session?.kind==="player"?`<div class="card"><b>${t("my_prefs")}</b>${prefsRow(false)}</div>`:""}`;
 }
 function bindPlayerGame(){
  const tg=$("tg");if(tg)tg.onclick=()=>{V.showRole=!V.showRole;render()};
@@ -205,6 +282,7 @@ function player(){
  const st=V.state;if(!st)return loading();
  if(!st.started){return `
   <h1>${t("lobby_title",esc(st.code))}</h1><p class="sub">${t("joined_as",esc(V.me?.name||""))}</p>
+  ${noticeCard(st)}
   <div class="card center"><b>${t("waiting")}</b><p class="sub" style="margin:6px 0 0">${t("waiting_sub")}</p></div>
   <div class="card"><b>${t("players_n",st.players.length)}</b>${playerList(st)}</div>
   ${st.comp?`<div class="card"><b>${t("roles_in_game")}</b><div class="chips mt">${compChips(st.comp)}</div></div>`:""}
@@ -258,6 +336,7 @@ function hostLobby(st){
  <div class="card"><b>${t("players_n",N)}</b>${N?playerList(st,{right:p=>p.host?"":`<button class="x" data-kick="${p.id}" title="${t("remove")}">✕</button>`}):`<p class="sub" style="margin:10px 0 0">${t("nobody_yet",MIN_PLAYERS)}</p>`}</div>
  <div class="card"><button class="sec big" id="addbot">${t("add_bot")}</button><p class="sub" style="margin:8px 0 0">${t("bots_hint")}</p></div>
  ${settingsCard(st)}
+ ${noticeHostCard(st)}
  <div class="card"><b>${t("roles_in_game")}</b>${st.comp?`<div class="chips mt">${compChips(st.comp)}</div>`:`<p class="sub" style="margin:10px 0 0">${N<MIN_PLAYERS?t("need_more",MIN_PLAYERS-N):t("err_"+st.compError)}</p>`}</div>
  <div class="err">${esc(V.err)}</div>
  <button class="big" id="start" ${ok?"":"disabled"}>${t("start")}</button>
@@ -266,6 +345,7 @@ function hostLobby(st){
 bind.host=()=>{
  const st=V.state;if(!st)return;
  if(st.started)return st.fullSettings.auto&&st.hostPlayerId!==null?bindHostPlaying(st):bindHostGame(st);
+ bindHostCommon();
  const link=inviteLink(st.code);
  $("copy").onclick=async e=>{
   try{await navigator.clipboard.writeText(link);e.target.textContent=t("copied")}
@@ -304,15 +384,39 @@ function hostPlaying(st){
 }
 function autoCard(st){
  return `<div class="card"><b>${t("auto_title")}</b>${sub("auto_sub")}
-  ${st.game.winner?`<button class="big" id="again">${t("new_game")}</button>`:`<button class="sec big" id="skip">${t("auto_skip")}</button>`}
-  ${prefsRow()}
+  ${st.game.winner?`<button class="big" id="again">${t("new_game")}</button>`:`<button class="sec big" id="skip">${t("auto_skip")}</button>
+   <div class="row mt"><button class="sec sm tmx" style="flex:1">⏱ ${t("tb_plus",30)}</button>${waitingRow(st)}</div>`}
+  ${prefsRow(true)}
+  ${noticeForm(st)}
   <p class="sub" style="text-align:left;margin:10px 0">${t("room_link",esc(inviteLink(st.code)))}</p>
   <button class="sec big" id="reset">${t("back_lobby")}</button><button class="sec big mt" id="close">${t("close_room")}</button></div>`;
 }
-function prefsRow(){return `<div class="row mt"><button class="sec sm" id="pv" style="flex:1">${prefs.voice?"🔊":"🔇"} ${t("voice")}</button><button class="sec sm" id="ps" style="flex:1">${prefs.sound?"🔔":"🔕"} ${t("sound")}</button></div>`}
+// Sound settings of this phone (the voice narrator speaks only on the host's phone).
+function prefsRow(hostPhone){
+ const b=(id,on,a,z,k)=>`<button class="sec sm" id="${id}" style="flex:1">${on?a:z} ${t(k)}</button>`;
+ return `<div class="row mt" style="flex-wrap:wrap">${hostPhone?b("pv",prefs.voice,"🔊","🔇","voice"):""}${b("ps",prefs.sound,"🔔","🔕","sound")}${"vibrate" in navigator?b("pb",prefs.vibe,"📳","📴","vibe"):""}</div>`;
+}
+// Host: send a short message to every phone.
+function noticeForm(st){
+ return `<div class="mt"><b>${t("notice_host")}</b>
+  <div class="row mt"><input id="ntc" maxlength="200" placeholder="${t("notice_ph")}" autocomplete="off"><button id="ntcsend">📢</button></div>
+  ${st.notice?`<div class="picks mt">${t("notice_now")}: <b>${esc(st.notice.text)}</b> <a href="#" id="ntcdel">${t("notice_del")}</a></div>`:""}</div>`;
+}
+function noticeHostCard(st){return `<div class="card">${noticeForm(st).replace('<div class="mt">','<div>')}</div>`}
+// Who the game is waiting for, and a button that makes their phones ring.
+function waitingRow(st){
+ const w=(st.waiting||[]).filter(id=>{const p=st.players.find(x=>x.id===id);return p&&!p.bot&&!p.host});
+ return w.length?`<button class="sec sm" id="nudge" style="flex:1">🔔 ${t("nudge_btn",w.length)}</button>`:"";
+}
 function bindHostCommon(){
  const sk=$("skip");if(sk)sk.onclick=()=>{if(confirm(t("auto_skip_q")))(HR.game.stage==="night"?H("host:night"):H("host:vote"))};
  const ag=$("again");if(ag)ag.onclick=()=>H("host:reset");
+ app.querySelectorAll(".tmx").forEach(b=>b.onclick=()=>H("host:extend",{seconds:30}).then(r=>{if(r.ok)toast(t("tb_added",30))}));
+ const nd=$("nudge");if(nd)nd.onclick=()=>H("host:nudge").then(r=>{if(r.ok)toast(t("nudge_sent",r.n))});
+ const nsend=()=>{const i=$("ntc");if(!i||!i.value.trim())return;const v=i.value;i.value="";H("host:notice",{text:v}).then(r=>{if(r.ok)toast(t("notice_sent"))})};
+ const ns=$("ntcsend");if(ns)ns.onclick=nsend;
+ const ni=$("ntc");if(ni)ni.onkeydown=e=>{if(e.key==="Enter")nsend()};
+ const nx=$("ntcdel");if(nx)nx.onclick=e=>{e.preventDefault();H("host:notice",{text:""})};
  const rs_=$("reset");if(rs_)rs_.onclick=()=>{if(confirm(t("confirm_reset")))H("host:reset")};
  const cl=$("close");if(cl)cl.onclick=()=>{if(confirm(t("confirm_close")))goHome()};
 }
@@ -328,7 +432,11 @@ function timerButtons(st){
  const day=st.game.stage==="day",b=(label,s,txt)=>`<button class="sec sm tmb" data-l="${label}" data-s="${s}">${txt}</button>`;
  return `<div class="card"><b>${t("timer")}</b><div class="tbtns mt">
   ${day?b("disc",60,t("tb_disc",1))+b("disc",120,t("tb_disc",2))+b("disc",180,t("tb_disc",3))+b("speech",30,t("tb_speech",30))+b("speech",60,t("tb_speech",60)):b("night",30,t("tb_night",30))+b("night",60,t("tb_night",60))}
-  ${st.game.timer?`<button class="sm tmb" data-s="0">⏹ ${t("tb_stop")}</button>`:""}</div></div>`;
+  ${st.game.timer?`<button class="sec sm tmx">${t("tb_plus",30)}</button><button class="sm tmb" data-s="0">⏹ ${t("tb_stop")}</button>`:""}</div></div>`;
+}
+function waitingInfo(st){
+ const w=st.waiting||[];if(!w.length)return "";
+ return `<div class="picks mt">⏳ ${t("waiting_for",w.map(id=>esc(nameOf(id))).join(", "))}</div><div class="row mt">${waitingRow(st)}</div>`;
 }
 function hostGame(st){
  const a=aliveIds(),w=st.game.winner,night=st.game.stage==="night",picks=rs.pickList(HR);
@@ -336,7 +444,7 @@ function hostGame(st){
  h+=winnerCard(st,`<button class="big mt" id="again">${t("new_game")}</button>`);
  h+=timerCard(st);
  h+=newsCard(st);
- h+=`<div class="card"><div class="row" style="justify-content:space-between;align-items:center"><b>${t("players")}</b><button class="sec sm" id="tr">${t(G.showRoles?"hide_roles":"show_roles")}</button></div>`
+ h+=`<div class="card"><div class="row" style="justify-content:space-between;align-items:center"><b>${t("players")} <span class="sub">📶 ${st.players.filter(p=>p.connected).length}/${st.players.length}</span></b><button class="sec sm" id="tr">${t(G.showRoles?"hide_roles":"show_roles")}</button></div>`
   +playerList(st,{started:true,roles:id=>G.showRoles||w?roleOf(id):null,right:p=>`<button class="x tg" data-i="${p.id}" style="font-size:14px">${t(p.dead?"revive":"out")}</button>`})+`</div>`;
  if(!w)h+=timerButtons(st);
  if(!w&&night){
@@ -346,6 +454,7 @@ function hostGame(st){
   const has=k=>aliveRole(k)!==undefined;
   h+=`<div class="card"><b>${t("night_actions")}</b><div class="sub" style="text-align:left;margin:4px 0 0">${t("night_progress",done.length,actors.length)}</div>`
    +f("dn",has("don"))+f("mk",a.some(i=>isMafia(roleOf(i))))+f("mn",has("man"))+f("dc",has("doc")||has("nurse"))+f("ms",has("mis"))+f("dt",has("det")||has("ast"))+f("sn",has("sn")&&!st.used.sniper)
+   +waitingInfo(st)
    +`<button class="big" id="en" style="margin-top:14px">${t("end_night")}</button></div>`;
  }else if(!w){
   const vp=picks.filter(x=>x.kind==="vote"),jd=picks.find(x=>x.kind==="jd");
@@ -353,11 +462,12 @@ function hostGame(st){
    +(vp.length?`<div class="picks">${vp.map(x=>`📱 ${esc(nameOf(x.id))} → <b>${esc(nameOf(x.target))}</b>`).join(" · ")}</div>`:"")
    +(jd?`<div class="picks">⚖️ ${t("judge_pick",esc(nameOf(jd.target)))}</div>`:"")
    +a.map(i=>`<div class="pl"><span>${esc(nameOf(i))}</span><span><button class="sec vb" data-i="${i}" data-d="-1" style="padding:4px 14px">−</button> <b style="display:inline-block;min-width:28px;text-align:center">${totalVotes(i)}</b> <button class="vb" data-i="${i}" data-d="1" style="padding:4px 14px">+</button></span></div>`).join("")
+   +waitingInfo(st)
    +`<button class="big" id="ev" style="margin-top:14px">${t("end_vote")}</button><button class="sec big" id="sk" style="margin-top:8px">${t("no_exile")}</button></div>`;
  }
  if(st.chat.length)h+=chatCard(st.chat,false);
  h+=`<div class="card"><b>${t("log")}</b> <span class="sub">${t("log_host_only")}</span>`+(st.log.length?st.log.slice().reverse().map(l=>`<div class="lg">${logText(l)}</div>`).join(""):`<p class="sub" style="margin:8px 0 0;text-align:left">${t("empty")}</p>`)+`</div>`
-  +`<div class="card"><b>${t("host_menu")}</b>${prefsRow()}<p class="sub" style="text-align:left;margin:10px 0">${t("room_link",esc(inviteLink(st.code)))}</p>`
+  +`<div class="card"><b>${t("host_menu")}</b>${prefsRow(true)}${noticeForm(st)}<p class="sub" style="text-align:left;margin:10px 0">${t("room_link",esc(inviteLink(st.code)))}</p>`
   +`<button class="sec big" id="reset">${t("back_lobby")}</button><button class="sec big mt" id="close">${t("close_room")}</button></div>`;
  return h;
 }
@@ -373,9 +483,62 @@ function bindHostGame(st){
  const sk=$("sk");if(sk)sk.onclick=()=>H("host:vote",{skip:true});
 }
 // Buttons that exist on several screens.
+function bindPrefs(root){
+ const q=id=>root.querySelector("#"+id);
+ const pv=q("pv");if(pv)pv.onclick=()=>{prefs.voice=!prefs.voice;savePrefs();if(prefs.voice)speak("voice_on");render()};
+ const ps=q("ps");if(ps)ps.onclick=()=>{prefs.sound=!prefs.sound;savePrefs();beep(1);render()};
+ const pb=q("pb");if(pb)pb.onclick=()=>{prefs.vibe=!prefs.vibe;savePrefs();vibe(150);render()};
+}
 function bindCommon(){
- const pv=$("pv");if(pv)pv.onclick=()=>{prefs.voice=!prefs.voice;savePrefs();if(prefs.voice)speak("voice_on");render()};
- const ps=$("ps");if(ps)ps.onclick=()=>{prefs.sound=!prefs.sound;savePrefs();beep(1);render()};
+ bindPrefs(app);
+ if(!V.state&&V.screen==="player")bind.loading(); // the player screen shows "loading" until the room arrives
+ const nx=$("ntcx");if(nx)nx.onclick=()=>{V.noticeHidden=V.state?.notice?.id;render()};
+}
+
+// ---------- help: a panel that slides down from the top ----------
+const helpBg=document.createElement("div");helpBg.id="helpbg";
+const helpEl=document.createElement("div");helpEl.id="help";helpEl.setAttribute("role","dialog");helpEl.setAttribute("aria-modal","true");
+document.body.append(helpBg,helpEl);
+let helpOpen=false,helpTab="now";
+const HELP_TABS=["now","rules","roles","how","set"];
+function openHelp(tab){helpOpen=true;if(tab)helpTab=tab;renderHelp();helpEl.scrollTop=0;helpEl.classList.add("open");helpBg.classList.add("open")}
+function closeHelp(){helpOpen=false;helpEl.classList.remove("open");helpBg.classList.remove("open")}
+helpBg.onclick=closeHelp;
+document.addEventListener("keydown",e=>{if(e.key==="Escape"&&helpOpen)closeHelp()});
+const ul=list=>`<ul class="hl">${list.map(x=>`<li>${x}</li>`).join("")}</ul>`;
+// The smallest number of players at which a role appears in automatic mode.
+const roleFrom=k=>{for(let n=MIN_PLAYERS;n<=30;n++)if(composition(n)[k]>0)return n;return 0};
+const sideKey=k=>isMafia(k)?"side_maf":k==="man"?"side_man":"side_civ";
+// A tip for what to do right now, depending on the screen and the phase.
+function helpNow(){
+ const st=V.state,g=st&&st.started?st.game:null;
+ let k;
+ if(V.screen==="join")k="now_join";
+ else if(V.screen==="host"&&st){
+  k=!g?"now_host_lobby":g.winner?"now_over":st.fullSettings&&st.fullSettings.auto?"now_host_auto":g.stage==="night"?"now_host_night":"now_host_day";
+ }else if(V.screen==="player"&&st){
+  const me=st.players.find(p=>p.id===V.me?.id);
+  k=!g?"now_player_lobby":g.winner?"now_over":me&&me.dead?"now_player_dead":g.stage==="night"?"now_player_night":"now_player_day";
+ }else k="now_home";
+ return `<p class="hp">${t(k)}</p>`;
+}
+function helpBody(){
+ if(helpTab==="now")return helpNow()+`<div class="hsec">${t("help_more")}</div>`;
+ if(helpTab==="rules")return `<div class="hsec">${t("h_goal")}</div>${ul(t("help_rules"))}<div class="hsec">${t("h_win")}</div>${ul(t("help_win"))}<div class="hsec">${t("h_night")}</div>${ul(t("help_night"))}`;
+ if(helpTab==="roles")return ORDER.map(k=>`<div class="hrole"><span class="re">${R[k].e}</span><div><b style="color:${R[k].c}">${roleName(k)}</b> <span class="rtag">${t(sideKey(k))}</span> <span class="rtag">${t("from_n",roleFrom(k))}</span><div class="rd">${roleDesc(k)}</div></div></div>`).join("")+`<p class="sub" style="text-align:left;margin:10px 0 0">${t("roles_note")}</p>`;
+ if(helpTab==="how")return `<div class="hsec">${t("h_host")}</div>${ul(t("help_host"))}<div class="hsec">${t("h_player")}</div>${ul(t("help_player"))}`;
+ return `<div class="hsec">${t("h_lang")}</div><div class="row">${I18N.LANGS.map(l=>`<button class="sm ${I18N.lang===l?"":"sec"}" data-hlang="${l}" style="flex:1">${l==="uz"?"Özbekça":"Русский"}</button>`).join("")}</div>
+  <div class="hsec">${t("h_sound")}</div>${prefsRow(V.session?.kind==="host")}<p class="sub" style="text-align:left;margin:8px 0 0">${t("prefs_note")}</p>`;
+}
+function renderHelp(){
+ patch(helpEl,`<div class="hin"><div class="hhead"><b>❓ ${t("help_title")}</b><button class="sec sm" id="hclose" aria-label="${t("help_close")}">✕</button></div>
+  <div class="htabs">${HELP_TABS.map(k=>`<button class="sm ${helpTab===k?"":"sec"}" data-htab="${k}">${t("htab_"+k)}</button>`).join("")}</div>
+  <div class="hbody" data-key="hb-${helpTab}">${helpBody()}</div>
+  <button class="hgrip" id="hgrip" aria-label="${t("help_close")}"></button></div>`);
+ $("hclose").onclick=closeHelp;$("hgrip").onclick=closeHelp;
+ helpEl.querySelectorAll("[data-htab]").forEach(b=>b.onclick=()=>{helpTab=b.dataset.htab;renderHelp();helpEl.scrollTop=0});
+ helpEl.querySelectorAll("[data-hlang]").forEach(b=>b.onclick=()=>{I18N.setLang(b.dataset.hlang);render()});
+ bindPrefs(helpEl);
 }
 
 boot();

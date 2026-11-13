@@ -22,7 +22,7 @@ const BASE=location.origin+location.pathname.replace(/index\.html$/,"");
 let V={screen:"loading",err:"",state:null,secret:null,showRole:false,me:null,session:store.get(SESSION_KEY)};
 // Host-only UI state for the current deal: manual night overrides, vote corrections, toggles.
 let G=null;
-const prefs=Object.assign({voice:true,sound:true},store.get("mafia:prefs")||{});
+const prefs=Object.assign({voice:true,sound:true,vibe:true},store.get("mafia:prefs")||{});
 const savePrefs=()=>store.set("mafia:prefs",prefs);
 
 function inviteLink(code){return `${BASE}?room=${code}`}
@@ -37,7 +37,7 @@ function setSession(s){V.session=s;s?store.set(SESSION_KEY,s):store.del(SESSION_
 const BROKERS=window.MAFIA_MQTT||["wss://broker.emqx.io:8084/mqtt","wss://broker.hivemq.com:8884/mqtt","wss://test.mosquitto.org:8081/mqtt"];
 const TOPIC="mafiyagame/v1/";
 const rs=new MafiaRoom.RoomStore();
-let HR=null,hostPriv=null,clients=[],pc=null,heartbeat=null,wakeLock=null,lastHeard=0;
+let HR=null,hostPriv=null,clients=[],heartbeat=null,wakeLock=null,lastHeard=0,hostRetry=[];
 const conns=new Map(); // host: cid -> {cid,pub,key,client,playerId,seen}
 const net={online:false};
 const randHex=n=>Array.from(crypto.getRandomValues(new Uint8Array(n)),b=>b.toString(16).padStart(2,"0")).join("");
@@ -63,10 +63,13 @@ async function unseal(key,m){
 }
 
 // ----- brokers -----
-function connectBroker(url){
+// Topics of a room: k = host key (retained), a = host online "1"/"0" (retained, "0" is the host's last will),
+// q = a player asks the host to announce itself again, h = to the host, p/<cid> = to one player.
+const topic=(code,x)=>TOPIC+code+"/"+x;
+function connectBroker(url,will){
  return new Promise((res,rej)=>{
   let c;
-  try{c=mqtt.connect(url,{clientId:"mf_"+randHex(8),clean:true,connectTimeout:8000,reconnectPeriod:3000,keepalive:30})}catch(e){return rej(e)}
+  try{c=mqtt.connect(url,{clientId:"mf_"+randHex(8),clean:true,connectTimeout:8000,reconnectPeriod:3000,keepalive:30,will})}catch(e){return rej(e)}
   const tm=setTimeout(()=>{c.end(true);rej(new Error("timeout "+url))},10000);
   c.once("connect",()=>{clearTimeout(tm);res(c)});
   c.on("error",()=>{});
@@ -75,9 +78,10 @@ function connectBroker(url){
 function stopNet(clearRoom){
  clearBotTimers();
  clearInterval(heartbeat);heartbeat=null;
- if(clearRoom&&HR)clients.forEach(c=>{try{c.publish(TOPIC+HR.code+"/k","",{retain:true,qos:1})}catch{}});
+ hostRetry.forEach(clearTimeout);hostRetry=[];
+ if(clearRoom&&HR)clients.forEach(c=>{try{c.publish(topic(HR.code,"k"),"",{retain:true,qos:1});c.publish(topic(HR.code,"a"),"",{retain:true,qos:1})}catch{}});
  const old=clients;clients=[];setTimeout(()=>old.forEach(c=>{try{c.end(true)}catch{}}),clearRoom?800:0);
- if(pc){try{pc.client.end(true)}catch{}pc=null}
+ playerClose();
  conns.clear();net.online=false;hostPriv=null;
  if(wakeLock){wakeLock.release().catch(()=>{});wakeLock=null}
 }
@@ -91,7 +95,15 @@ function goHome(){
 async function keepAwake(){
  try{if("wakeLock" in navigator&&!wakeLock&&document.visibilityState==="visible"){wakeLock=await navigator.wakeLock.request("screen");wakeLock.addEventListener("release",()=>{wakeLock=null})}}catch{}
 }
-document.addEventListener("visibilitychange",()=>{if(HR)keepAwake()});
+// A phone that comes back from the background (or back online) reconnects at once instead of waiting.
+function wakeNet(){
+ clients.forEach(c=>{if(!c.connected&&!c.disconnecting)try{c.reconnect()}catch{}});
+ P.pool.forEach(b=>{if(!b.client.connected&&!b.client.disconnecting)try{b.client.reconnect()}catch{}});
+ if(HR)announceAll();
+ if(P.code)probe();
+}
+document.addEventListener("visibilitychange",()=>{if(document.visibilityState==="visible"){if(HR)keepAwake();wakeNet()}});
+window.addEventListener("online",wakeNet);
 
 // ----- host side -----
 const ALIVE_MS=25000; // a player is shown offline after this long without a message
@@ -170,34 +182,59 @@ async function onHostMessage(client,payload){
   hostBroadcast();
  }catch(e){reply({t:type,ok:false,code:e.code||"error",error:e.message||""})}
 }
-function hostOnline(){net.online=clients.some(c=>c.connected);render()}
+function hostOnline(){
+ net.online=clients.some(c=>c.connected);
+ if(net.online&&V.err===t("err_net_restore"))V.err="";
+ render();
+}
+// The room key and "host is online" are retained, so a player who opens the link later still finds them.
+// They are sent again every 30 s and whenever a player asks, because a public broker may forget them.
+function announce(c){
+ if(!HR||!c.connected)return;
+ try{
+  c.publish(topic(HR.code,"k"),JSON.stringify({pub:HR.hostKey.pub}),{retain:true,qos:1});
+  c.publish(topic(HR.code,"a"),"1",{retain:true,qos:1});
+ }catch{}
+}
+function announceAll(){clients.forEach(announce)}
 function attachHostClient(c){
  if(!HR){c.end(true);return}
- const code=HR.code;
- const announce=()=>{c.subscribe(TOPIC+code+"/h",{qos:1});c.publish(TOPIC+code+"/k",JSON.stringify({pub:HR.hostKey.pub}),{retain:true,qos:1})};
- announce();
- c.on("connect",()=>{announce();hostOnline()});
+ const code=HR.code;let lastAsk=0;
+ const up=()=>{c.subscribe([topic(code,"h"),topic(code,"q")],{qos:1});announce(c)};
+ up();
+ c.on("connect",()=>{up();hostOnline()});
  c.on("close",hostOnline);c.on("offline",hostOnline);
- c.on("message",(topic,payload)=>{if(topic===TOPIC+code+"/h")onHostMessage(c,payload)});
+ c.on("message",(tp,payload)=>{
+  if(tp===topic(code,"h"))onHostMessage(c,payload);
+  else if(tp===topic(code,"q")&&Date.now()-lastAsk>2000){lastAsk=Date.now();announce(c)}
+ });
  clients.push(c);hostOnline();
 }
-// Connects to every broker it can; resolves true as soon as one works.
+// Connects to every broker it can and keeps retrying the ones that failed, so a player whose
+// network reaches only one of them still finds the room. Resolves true as soon as one works.
 async function startHost(){
  const priv=await crypto.subtle.importKey("jwk",HR.hostKey.priv,ECDH,false,["deriveKey"]);
  hostPriv=priv;
  clearInterval(heartbeat);
+ let beats=0;
  heartbeat=setInterval(()=>{
   if(!HR)return;
   conns.forEach((c,k)=>{if(Date.now()-c.seen>5*60000)conns.delete(k)});
+  if(++beats%6===0)announceAll();
   if(refreshConnected())hostBroadcast();
  },5000);
  keepAwake();
+ const will={topic:topic(HR.code,"a"),payload:"0",retain:true,qos:1};
  return new Promise(res=>{
   let left=BROKERS.length,done=false;
-  BROKERS.forEach(url=>connectBroker(url).then(c=>{
+  const attempt=(url,first)=>connectBroker(url,will).then(c=>{
    if(hostPriv!==priv){c.end(true);return}
    attachHostClient(c);if(!done){done=true;res(true)}
-  },()=>{if(--left===0&&!done){done=true;res(false)}}));
+  },()=>{
+   if(first&&--left===0&&!done){done=true;res(false)}
+   if(hostPriv===priv)hostRetry.push(setTimeout(()=>{if(hostPriv===priv)attempt(url,false)},15000));
+  });
+  BROKERS.forEach(url=>attempt(url,true));
  });
 }
 const ok=(x={})=>({ok:true,...x});
@@ -228,7 +265,10 @@ const hostOps={
  "host:dead"(d){rs.setDead(HR,Number(d.id),!!d.dead);hostBroadcast();return ok()},
  "host:night"(){rs.resolveNight(HR,k=>G&&G.night[k]!==undefined&&G.night[k]!==""?G.night[k]:null);if(G){G.night={};G.votes={}}saveG();hostBroadcast();return ok()},
  "host:vote"(d){rs.resolveVote(HR,id=>totalVotes(id),!!d.skip);if(G)G.votes={};saveG();hostBroadcast();return ok()},
- "host:timer"(d){if(d.seconds)rs.startTimer(HR,d.label||"disc",d.seconds);else rs.stopTimer(HR);hostBroadcast();return ok()}
+ "host:timer"(d){if(d.seconds)rs.startTimer(HR,d.label||"disc",d.seconds);else rs.stopTimer(HR);hostBroadcast();return ok()},
+ "host:extend"(d){rs.extendTimer(HR,d.seconds||30);timerBeeped="";hostBroadcast();return ok()},
+ "host:nudge"(){const n=rs.nudge(HR);hostBroadcast();return ok({n})},
+ "host:notice"(d){rs.announce(HR,d.text);hostBroadcast();return ok()}
 };
 // Votes = votes from phones + the host's manual correction.
 function totalVotes(i){return Math.max(0,(rs.voteTally(HR)[i]||0)+((G&&G.votes[i])||0))}
@@ -254,7 +294,7 @@ function scheduleBots(){
     try{
      const tg=MafiaBots.decide(rs,HR,p.id,kind);
      if(tg!=null){rs.setPick(HR,p.id,kind,tg);hostBroadcast()}
-     else if(kind==="jd")setTimeout(()=>{if(botStage===sk)botTimers.delete(key)},3000); // the judge looks again later
+     else if(kind==="jd"||kind==="vote")setTimeout(()=>{if(botStage===sk){botTimers.delete(key);scheduleBots()}},3000); // looks again later (a bot that held back its vote, the judge)
     }catch(e){console.warn(e)}
    },delay));
   });
@@ -287,11 +327,18 @@ function tickTimers(){
  const left=Math.max(0,timerEnd-Date.now());
  document.querySelectorAll(".tmr-val").forEach(el=>{el.textContent=fmt(left)});
  document.querySelectorAll(".tmr-bar").forEach(el=>{el.style.width=(100*left/((el.dataset.total||1)*1000))+"%"});
- if(left===0&&timerBeeped!==timerKey){timerBeeped=timerKey;beep(3);if(navigator.vibrate)navigator.vibrate([200,100,200])}
+ if(left===0&&timerBeeped!==timerKey){timerBeeped=timerKey;beep(3);vibe([200,100,200])}
  else if(left>0&&left<=10000&&timerBeeped!==timerKey&&timerBeeped!==timerKey+"10"){timerBeeped=timerKey+"10";beep(1)}
 }
 
-// ---------- sounds ----------
+// ---------- sounds, vibration, pop-up messages ----------
+function vibe(p){if(prefs.vibe&&navigator.vibrate)try{navigator.vibrate(p)}catch{}}
+let toastEl=null,toastTm=null;
+function toast(text){
+ if(!toastEl){toastEl=document.createElement("div");toastEl.className="toast";toastEl.setAttribute("role","status");document.body.appendChild(toastEl)}
+ toastEl.textContent=text;toastEl.classList.add("on");
+ clearTimeout(toastTm);toastTm=setTimeout(()=>toastEl.classList.remove("on"),3500);
+}
 let audio=null;
 document.addEventListener("pointerdown",()=>{try{audio=audio||new (window.AudioContext||window.webkitAudioContext)();audio.resume()}catch{}},{passive:true});
 function beep(n=1){
@@ -376,56 +423,106 @@ function recordPlayerStats(){
 }
 
 // ----- player side -----
+// The player stays connected to every broker it can reach and listens for the room on all of them.
+// Messages go to the host through the best broker right now (connected, room announced, host online),
+// so if one broker drops or the host is reachable only through another one, the player just switches.
 let pending=null; // {type, resolve}
-// Tries all brokers at once; uses the first one where the host's room is announced.
-function findHost(code){
- return new Promise((res,rej)=>{
-  let left=BROKERS.length,done=false,sawBroker=false;
-  const fail=()=>{if(--left===0&&!done){done=true;rej(new Error(t(sawBroker?"err_host_offline":"err_net")))}};
-  BROKERS.forEach(url=>connectBroker(url).then(c=>{
-   if(done){c.end(true);return}
-   sawBroker=true;
-   const kt=TOPIC+code+"/k";
-   const tm=setTimeout(()=>{c.end(true);fail()},8000);
-   const first=(topic,payload)=>{
-    if(topic!==kt)return;
-    let pub=null;try{pub=JSON.parse(payload.toString()).pub}catch{}
-    clearTimeout(tm);c.removeListener("message",first);
-    if(done||!pub){c.end(true);if(!pub)fail();return}
-    done=true;res({client:c,hostPub:pub});
-   };
-   c.on("message",first);
-   c.subscribe(kt,{qos:1});
-  },fail));
- });
+const P={code:null,pool:new Map(),hostPub:null,key:null,cid:null,pub:null,priv:null,closed:false,waiters:[]};
+function playerClose(){
+ P.pool.forEach(b=>{try{b.client.end(true)}catch{}});
+ P.pool.clear();P.code=null;P.hostPub=null;P.key=null;P.closed=false;
+ P.waiters.splice(0).forEach(w=>w());
 }
-async function playerConnect(code){
- if(pc&&pc.code===code&&pc.client.connected)return pc;
- if(pc){try{pc.client.end(true)}catch{}pc=null}
- const {client,hostPub}=await findHost(code);
- const keys=await genKeys();
- const me={client,code,cid:randHex(10),pub:await exportPub(keys.publicKey),priv:keys.privateKey,key:await derive(keys.privateKey,hostPub),hostPub};
- const pt=TOPIC+code+"/p/"+me.cid,kt=TOPIC+code+"/k";
- client.subscribe(pt,{qos:1});
- client.on("message",async(topic,payload)=>{
-  if(pc!==me)return;
-  if(topic===kt){ // host re-announced (same key after a reload); empty means the room was closed
-   let pub=null;try{pub=JSON.parse(payload.toString()).pub}catch{}
-   if(!pub){net.online=false;V.err=t("err_host_closed");render()}
-   return;
+function probe(){P.pool.forEach(b=>{if(b.client.connected)try{b.client.publish(topic(P.code,"q"),"1",{qos:0})}catch{}})}
+async function setHostKey(pub){
+ if(P.hostPub===pub&&P.key)return;
+ const key=await derive(P.priv,pub);
+ P.hostPub=pub;P.key=key;P.closed=false;
+ P.waiters.splice(0).forEach(w=>w());
+}
+function openBroker(url){
+ const code=P.code,b={url,client:null,hostPub:null,alive:null,ever:false};
+ const kt=topic(code,"k"),at=topic(code,"a"),pt=topic(code,"p/"+P.cid);
+ try{b.client=mqtt.connect(url,{clientId:"mf_"+randHex(8),clean:true,connectTimeout:8000,reconnectPeriod:4000,keepalive:30})}catch{return}
+ const c=b.client;
+ c.on("error",()=>{});
+ c.on("connect",()=>{
+  b.ever=true;
+  c.subscribe([kt,at,pt],{qos:1},()=>{try{c.publish(topic(code,"q"),"1",{qos:0})}catch{}});
+ });
+ c.on("close",()=>{if(P.code===code)playerLink()});
+ c.on("message",async(tp,payload)=>{
+  if(P.code!==code)return;
+  const txt=payload.toString();
+  if(tp===kt){
+   let pub=null;try{pub=JSON.parse(txt).pub}catch{}
+   b.hostPub=pub;
+   if(pub)await setHostKey(pub);
+   else if(!payload.length&&![...P.pool.values()].some(x=>x.hostPub)){P.closed=true;P.waiters.splice(0).forEach(w=>w())}
+   return playerLink();
   }
-  if(topic!==pt)return;
-  let msg;try{msg=await unseal(me.key,JSON.parse(payload.toString()))}catch{return}
+  if(tp===at){b.alive=txt==="1"?true:txt==="0"?false:null;return playerLink()}
+  if(tp!==pt||!P.key)return;
+  let msg;try{msg=await unseal(P.key,JSON.parse(txt))}catch{return}
   onPlayerMessage(msg);
  });
- client.on("close",()=>{if(pc===me){net.online=false;render()}});
- pc=me;
- startPlayerHeartbeat();
- return me;
+ P.pool.set(url,b);
+}
+// Best broker to reach the host now, or null.
+function bestBroker(){
+ let best=null,score=0;
+ P.pool.forEach(b=>{
+  if(!b.client.connected||!b.hostPub||b.hostPub!==P.hostPub)return;
+  const s=b.alive===false?1:b.alive===true?3:2;
+  if(s>score){score=s;best=b}
+ });
+ return best;
+}
+// Why the host can't be reached, as a translated message.
+function linkProblem(){
+ const bs=[...P.pool.values()];
+ if(P.closed)return t("err_host_closed");
+ if(!bs.some(b=>b.client.connected))return t(bs.some(b=>b.ever)?"err_net_lost":"err_net");
+ if(!P.key)return t("err_room_missing",P.code);
+ if(!bestBroker())return t("err_net_lost");
+ if(bestBroker().alive===false)return t("err_host_away");
+ return "";
+}
+// Shows the current link state on the player's screen.
+function playerLink(){
+ if(V.session?.kind!=="player"&&V.screen!=="join")return;
+ if(V.screen==="player"&&V.me&&net.online)return;
+ const e=linkProblem();
+ if(V.screen==="player"&&!V.me&&e&&V.err!==e){V.err=e;render()}
+}
+// Opens (or reuses) the connections for a room and waits up to `ms` until the host's room is found.
+function playerConnect(code,ms=15000){
+ if(P.code!==code){
+  playerClose();
+  P.code=code;
+ }
+ return (async()=>{
+  if(!P.priv){const keys=await genKeys();P.priv=keys.privateKey;P.pub=await exportPub(keys.publicKey);P.cid=randHex(10)}
+  if(P.code!==code)throw new Error(t("err_generic"));
+  if(!P.pool.size)BROKERS.forEach(openBroker);
+  else{wakeNet()}
+  startPlayerHeartbeat();
+  const ready=()=>P.key&&bestBroker();
+  if(ready())return true;
+  await new Promise(res=>{
+   const tm=setTimeout(done,ms),iv=setInterval(()=>{if(ready()||P.closed)done()},300);
+   function done(){clearTimeout(tm);clearInterval(iv);res()}
+   P.waiters.push(()=>{if(P.closed)done()});
+  });
+  if(ready())return true;
+  throw new Error(linkProblem()||t("err_room_missing",code));
+ })();
 }
 function playerSend(obj){
- if(!pc)return false;
- seal(pc.key,obj).then(s=>{try{pc.client.publish(TOPIC+pc.code+"/h",JSON.stringify({c:pc.cid,pub:pc.pub,...s}),{qos:1})}catch{}});
+ const b=bestBroker();
+ if(!b||!P.key)return false;
+ const code=P.code;
+ seal(P.key,obj).then(s=>{try{b.client.publish(topic(code,"h"),JSON.stringify({c:P.cid,pub:P.pub,...s}),{qos:1})}catch{}});
  return true;
 }
 let playerPhase="";
@@ -438,42 +535,59 @@ function onPlayerMessage(msg){
   V.state=msg.state;if(!msg.secret)V.showRole=false;V.secret=msg.secret;
   syncTimer(V.state);
   const g=V.state.game,k=V.state.started?g.round+g.stage+g.winner:"";
-  if(playerPhase&&k!==playerPhase){beep(1);if(navigator.vibrate)navigator.vibrate(200)}
+  if(playerPhase&&k!==playerPhase){beep(1);vibe(200)}
   playerPhase=k;
+  playerAlerts();
   recordPlayerStats();
-  if(!isTyping())render();
+  render();
  }
  else if(msg.t==="kicked"){stopNet();setSession(null);V.screen="kicked";render()}
 }
-// Don't redraw while someone types in the chat box (it would lose focus).
-const isTyping=()=>document.activeElement&&document.activeElement.id==="chatin"&&document.activeElement.value;
+// A new announcement from the host or a reminder ("your turn") makes the phone ring once.
+let seenNotice=null,seenNudge=null;
+function playerAlerts(){
+ const st=V.state,n=st.notice,nid=n?n.id:0,nudge=(V.secret&&V.secret.nudge)||0;
+ if(seenNotice!==null&&nid&&nid!==seenNotice){beep(2);vibe([150,80,150]);toast("📢 "+n.text)}
+ if(seenNudge!==null&&nudge>seenNudge){beep(2);vibe([300,120,300]);toast(t("nudge_got"))}
+ seenNotice=nid;seenNudge=nudge;
+}
 function startPlayerHeartbeat(){
  clearInterval(heartbeat);
  heartbeat=setInterval(()=>{
-  if(!pc||V.session?.kind!=="player")return;
-  playerSend({t:"ping",token:V.session.token});
+  if(!P.code||V.session?.kind!=="player")return;
+  if(!playerSend({t:"ping",token:V.session.token})||!net.online)probe();
   if(net.online&&Date.now()-lastHeard>ALIVE_MS){net.online=false;render()}
  },8000);
 }
 function request(msg,type){
  return new Promise(res=>{
-  const tm=setTimeout(()=>{if(pending&&pending.type===type)pending=null;res({ok:false,error:t("err_host_silent")})},12000);
+  const tm=setTimeout(()=>{if(pending&&pending.type===type)pending=null;res({ok:false,error:linkProblem()||t("err_host_silent")})},12000);
   pending={type,resolve:r=>{clearTimeout(tm);res(r)}};
-  if(!playerSend(msg)){clearTimeout(tm);pending=null;res({ok:false,error:t("err_no_host_link")})}
+  if(!playerSend(msg)){clearTimeout(tm);pending=null;res({ok:false,error:linkProblem()||t("err_no_host_link")})}
  });
 }
+// Reconnects a saved player to their room. Keeps trying (listening on every broker) until the host is back;
+// the player can also press "Try again" or leave.
+let resumeRun=0;
 async function playerResume(retry=3000){
  const s=V.session;if(!s||s.kind!=="player")return;
- try{await playerConnect(s.code)}catch(e){V.err=e.message;render();return setTimeout(()=>playerResume(Math.min(retry*1.5,15000)),retry)}
+ const run=++resumeRun;
+ const again=()=>setTimeout(()=>{if(run===resumeRun)playerResume(Math.min(retry*1.5,15000))},retry);
+ try{await playerConnect(s.code)}catch(e){if(run!==resumeRun)return;V.err=e.message;render();return again()}
+ if(run!==resumeRun)return;
  const r=await request({t:"resume",token:s.token},"joined");
+ if(run!==resumeRun)return;
  if(r.ok){V.me={id:r.playerId,name:r.name};net.online=true;lastHeard=Date.now();V.err="";V.screen="player";render();return}
  if(r.code==="no_player"||r.code==="no_room"){stopNet();setSession(null);V.screen="join";V.err=t("err_not_in_room");return render()}
- V.err=errText(r);render();setTimeout(()=>playerResume(Math.min(retry*1.5,15000)),retry);
+ V.err=errText(r);render();again();
 }
+function playerRetry(){V.err=t("connecting");render();wakeNet();playerResume()}
+// Banner text for a player who lost the host during the game.
+function playerBanner(){return (P.code&&linkProblem())||t("banner_player")}
 const isHostPlayer=()=>V.session?.kind==="host"&&HR&&HR.hostPlayerId!==null;
 const playerOps={
  async "player:join"(d){
-  try{await playerConnect(d.code)}catch(e){return {ok:false,error:e.message}}
+  try{await playerConnect(d.code)}catch(e){playerClose();return {ok:false,error:e.message}}
   const r=await request({t:"join",name:d.name},"joined");
   if(r.ok){net.online=true;lastHeard=Date.now()}
   return r;
@@ -487,7 +601,7 @@ const playerOps={
   if(isHostPlayer()){rs.addChat(HR,HR.hostPlayerId,d.text);hostBroadcast();return ok()}
   return request({t:"chat",token:V.session.token,text:d.text},"chatted");
  },
- async "player:leave"(d){if(pc)await request({t:"leave",token:d.token},"left");return ok()}
+ async "player:leave"(d){if(P.key)await request({t:"leave",token:d.token},"left");return ok()}
 };
 
 async function emit(ev,data){

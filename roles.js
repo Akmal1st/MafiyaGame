@@ -20,12 +20,13 @@
   const MIN_PLAYERS = 5;
 
   function composition(N) {
-    const m = N <= 6 ? 1 : N <= 9 ? 2 : N <= 12 ? 3 : N <= 15 ? 4 : 5 + Math.floor((N - 16) / 4);
+    // About one mafia per four players; the maniac joins from 10 players so the town is not outnumbered early.
+    const m = N <= 7 ? 1 : N <= 11 ? 2 : N <= 15 ? 3 : N <= 19 ? 4 : 5 + Math.floor((N - 20) / 5);
     const c = {};
     c.don = N >= 10 ? 1 : 0;
     c.mafia = m - c.don;
     c.det = 1; c.doc = 1;
-    c.man = N >= 7 ? 1 : 0;
+    c.man = N >= 10 ? 1 : 0;
     c.mis = N >= 8 ? 1 : 0;
     c.nurse = N >= 11 ? 1 : 0;
     c.ast = N >= 12 ? 1 : 0;

@@ -6,7 +6,7 @@
 let lastScreen="";
 function render(){
  const inGame=V.screen==="host"||V.screen==="player";
- const off=!net.online&&inGame?`<div class="banner">${t(V.screen==="host"?"banner_host":"banner_player")}</div>`:"";
+ const off=!net.online&&inGame&&V.state?`<div class="banner">${V.screen==="host"?t("banner_host"):esc(playerBanner())}</div>`:"";
  const screens={loading,home,join,player,host,kicked,stats};
  patch(app,topBar(inGame)+off+(screens[V.screen]||home)());
  if(lastScreen!==V.screen){lastScreen=V.screen;scrollTo(0,0)}
@@ -66,8 +66,18 @@ function patchNode(a,b){
 const bind={};
 const sub=(k,...a)=>`<p class="sub" style="text-align:left;margin:6px 0 10px">${t(k,...a)}</p>`;
 
-function loading(){return `<h1>🎭 ${t("mafia")}</h1><p class="sub">${t("connecting")}</p>${V.err?`<p class="err center">${esc(V.err)}</p>`:""}<p class="sub"><a href="#" id="lhome">${t("to_home")}</a></p>`}
-bind.loading=()=>{const l=$("lhome");if(l)l.onclick=e=>{e.preventDefault();goHome()}};
+// Shown while a page connects. A player who can't reach the room sees why, can try again at once or leave.
+function loading(){
+ const pl=V.session?.kind==="player";
+ const err=(pl&&P.code&&linkProblem())||V.err;
+ return `<h1>🎭 ${t("mafia")}</h1>${pl?`<p class="sub">${t("room_n",esc(V.session.code))}</p>`:""}<p class="sub">${t("connecting")}</p>
+ ${err?`<p class="err center">${esc(err)}</p>`:""}
+ ${pl&&err?`<button class="big" id="lretry">${t("retry_now")}</button><p class="sub">${t("retry_auto")}</p>`:""}
+ ${pl?`<button class="sec big mt" id="lhome">${t("leave_wait")}</button>`:`<p class="sub"><a href="#" id="lhome">${t("to_home")}</a></p>`}`}
+bind.loading=()=>{
+ const l=$("lhome");if(l)l.onclick=e=>{e.preventDefault();goHome()};
+ const r=$("lretry");if(r)r.onclick=()=>{r.disabled=true;playerRetry()};
+};
 
 // ---------- home ----------
 let installPrompt=null;
@@ -481,6 +491,7 @@ function bindPrefs(root){
 }
 function bindCommon(){
  bindPrefs(app);
+ if(!V.state&&V.screen==="player")bind.loading(); // the player screen shows "loading" until the room arrives
  const nx=$("ntcx");if(nx)nx.onclick=()=>{V.noticeHidden=V.state?.notice?.id;render()};
 }
 

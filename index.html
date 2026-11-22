@@ -4,119 +4,25 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Mafiya onlayn</title>
-<meta name="theme-color" content="#14121c">
+<meta name="theme-color" content="#0a090b">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icons/icon-192.png">
 <link rel="apple-touch-icon" href="icons/icon-192.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
-<style>
-:root{--bg:#14121c;--card:#201d2e;--tx:#f1eefb;--mut:#9a95b3;--ac:#e0314b;--ok:#3fae6a;--ln:#322e47;color-scheme:dark;
-box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
-@media(prefers-color-scheme:light){:root:not([data-theme="dark"]){--bg:#f4f2fa;--card:#fff;--tx:#1c1a28;--mut:#6b6683;--ln:#dcd8ea;color-scheme:light}}
-*{box-sizing:border-box}
-html,body{margin:0;background:var(--bg);color:var(--tx);font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
-#app{max-width:480px;margin:0 auto;padding:16px;min-height:100vh}
-h1{font-size:24px;margin:8px 0 4px;text-align:center}
-.sub{color:var(--mut);text-align:center;margin:0 0 16px;font-size:14px}
-.card{background:var(--card);border:1px solid var(--ln);border-radius:16px;padding:14px;margin-bottom:14px}
-.row{display:flex;gap:8px}
-input{flex:1;min-width:0;font-size:17px;padding:12px;border-radius:12px;border:1px solid var(--ln);background:var(--bg);color:var(--tx)}
-input.code{text-transform:uppercase;letter-spacing:4px;text-align:center;font-weight:700}
-button{font:inherit;font-size:17px;font-weight:600;border:0;border-radius:12px;padding:13px 16px;background:var(--ac);color:#fff;cursor:pointer}
-button.sec{background:var(--ln);color:var(--tx)}
-button.big{width:100%;padding:16px;font-size:19px}
-button.sm{padding:6px 10px;font-size:14px}
-button:disabled{opacity:.4}
-.pl{display:flex;align-items:center;justify-content:space-between;padding:9px 4px;border-bottom:1px solid var(--ln);gap:8px}
-.pl:last-child{border:0}
-.pl .x{background:none;color:var(--mut);padding:4px 10px;font-size:20px}
-.chips{display:flex;flex-wrap:wrap;gap:8px}
-.chip{padding:6px 10px;border-radius:20px;background:var(--bg);border:1px solid var(--ln);font-size:14px}
-.center{text-align:center}
-.role{font-size:68px}
-.rname{font-size:30px;font-weight:800;margin:4px 0}
-.rdesc{color:var(--mut);font-size:16px;line-height:1.4}
-.team{margin-top:12px;padding:10px;border-radius:12px;background:var(--bg);font-size:15px}
-.dead span.n{opacity:.5;text-decoration:line-through}
-.fl{display:block;margin-top:10px;font-size:14px;color:var(--mut)}
-select{width:100%;margin-top:4px;font-size:16px;padding:10px;border-radius:10px;border:1px solid var(--ln);background:var(--bg);color:var(--tx)}
-.lg{padding:7px 0;border-bottom:1px solid var(--ln);font-size:14px;line-height:1.35}
-.dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--ok);margin-right:6px;vertical-align:middle}
-.dot.off{background:var(--mut);opacity:.5}
-.link{word-break:break-all;font-size:15px;padding:10px;border-radius:10px;background:var(--bg);border:1px solid var(--ln);margin:8px 0}
-.qr{display:block;width:200px;height:200px;margin:8px auto;background:#fff;border-radius:12px;padding:10px}
-.qr svg{display:block;width:100%;height:100%}
-.bigcode{font-size:36px;font-weight:800;letter-spacing:6px;text-align:center;margin:4px 0}
-.err{color:var(--ac);font-size:14px;margin-top:8px;min-height:1em}
-.banner{position:sticky;top:0;z-index:5;background:var(--ac);color:#fff;text-align:center;padding:6px;border-radius:10px;font-size:14px;margin-bottom:10px}
-.mt{margin-top:10px}
-a{color:var(--mut)}
-.lang{display:flex;justify-content:flex-end;gap:6px;margin-bottom:-4px}
-.lang button{padding:5px 10px;font-size:13px;border-radius:8px;background:var(--ln);color:var(--tx)}
-.lang button.on{background:var(--ac);color:#fff}
-.act{text-align:left;margin-top:14px;padding-top:12px;border-top:1px solid var(--ln)}
-.card>.act:first-child{margin-top:0;padding-top:0;border:0}
-.targets{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0 8px}
-.targets button{padding:9px 12px;font-size:15px}
-.targets button.on{background:var(--ac)}
-.picks{font-size:13px;color:var(--mut);margin-top:4px}
-.rtag{display:inline-block;font-size:12px;padding:1px 7px;border-radius:10px;border:1px solid var(--ln);margin-left:4px;white-space:nowrap}
-.timer{padding:10px 14px}
-.tmr-val{font-size:26px;font-weight:800;font-variant-numeric:tabular-nums}
-.tmr-track{height:6px;border-radius:3px;background:var(--bg);margin-top:8px;overflow:hidden}
-.tmr-bar{height:100%;width:100%;background:var(--ac);transition:width 1s linear}
-.news{font-size:16px;line-height:1.4}
-.chat{max-height:260px;overflow-y:auto;display:flex;flex-direction:column;gap:6px}
-.msg{padding:7px 10px;border-radius:10px;background:var(--bg);font-size:15px;word-break:break-word}
-.chk{display:flex;align-items:center;gap:10px;padding:8px 0;font-size:16px}
-.chk input{flex:none;width:22px;height:22px;accent-color:var(--ac)}
-button.cnt{padding:4px 14px}
-.cntv{display:inline-block;min-width:24px;text-align:center}
-.tbtns{display:flex;flex-wrap:wrap;gap:8px}
-.top{display:flex;align-items:center;gap:8px;margin-bottom:-4px}
-.top .lang{margin:0 0 0 auto}
-.conn{font-size:13px;color:var(--mut);white-space:nowrap}
-.notice{border-color:var(--ac);font-size:16px;line-height:1.4}
-details.card>summary{cursor:pointer;list-style:none}
-details.card>summary::-webkit-details-marker{display:none}
-details.card>summary::after{content:" ▾";color:var(--mut)}
-details.card[open]>summary::after{content:" ▴"}
-details.card[open]>summary{margin-bottom:6px}
-#helpbg{position:fixed;inset:0;z-index:40;background:rgba(0,0,0,.45);opacity:0;pointer-events:none;transition:opacity .25s}
-#helpbg.open{opacity:1;pointer-events:auto}
-#help{position:fixed;left:0;right:0;top:0;z-index:50;max-height:88vh;overflow-y:auto;overscroll-behavior:contain;background:var(--card);color:var(--tx);
- border-bottom:1px solid var(--ln);border-radius:0 0 20px 20px;box-shadow:0 10px 30px rgba(0,0,0,.35);transform:translateY(-105%);visibility:hidden;
- transition:transform .28s ease,visibility 0s .28s;padding-top:env(safe-area-inset-top,0px)}
-#help.open{transform:none;visibility:visible;transition:transform .28s ease}
-.hin{max-width:480px;margin:0 auto;padding:14px 16px 6px}
-.hhead{display:flex;justify-content:space-between;align-items:center;font-size:19px}
-.htabs{display:flex;flex-wrap:wrap;gap:6px;margin:12px 0 4px}
-.htabs button{font-size:13px;padding:7px 10px}
-.hbody{font-size:15px;line-height:1.45}
-.hp{font-size:16px;line-height:1.5;margin:12px 0}
-.hsec{font-weight:700;margin:14px 0 6px}
-.hbody .hsec:first-child{margin-top:10px}
-.hl{margin:0;padding-left:20px}.hl li{margin:5px 0}
-.hrole{display:flex;gap:10px;padding:9px 0;border-bottom:1px solid var(--ln)}
-.hrole .re{font-size:28px;line-height:1}
-.hrole .rd{color:var(--mut);font-size:14px;margin-top:3px}
-.hgrip{display:block;width:100%;background:none;padding:12px 0 6px;border-radius:0}
-.hgrip::before{content:"";display:block;margin:0 auto;width:44px;height:5px;border-radius:3px;background:var(--ln)}
-.toast{position:fixed;left:50%;bottom:calc(18px + env(safe-area-inset-bottom,0px));transform:translate(-50%,20px);z-index:60;max-width:min(440px,calc(100vw - 32px));
- background:var(--tx);color:var(--bg);padding:11px 16px;border-radius:12px;font-size:15px;box-shadow:0 6px 20px rgba(0,0,0,.3);opacity:0;pointer-events:none;transition:opacity .2s,transform .2s}
-.toast.on{opacity:1;transform:translate(-50%,0)}
-@media(prefers-reduced-motion:reduce){#help,#helpbg,.toast{transition:none}}
-</style>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;700;800&family=Playfair+Display:wght@700;900&display=swap">
+<link rel="stylesheet" href="style.css?v=11">
 </head>
 <body>
 <div id="app"></div>
 <script src="vendor/mqtt-5.10.4.min.js"></script>
 <script src="vendor/qrcode-generator-1.4.4.js"></script>
-<script src="i18n.js?v=10"></script>
-<script src="roles.js?v=10"></script>
-<script src="room.js?v=10"></script>
-<script src="bots.js?v=10"></script>
-<script src="net.js?v=10"></script>
-<script src="app.js?v=10"></script>
+<script src="i18n.js?v=11"></script>
+<script src="roles.js?v=11"></script>
+<script src="room.js?v=11"></script>
+<script src="bots.js?v=11"></script>
+<script src="net.js?v=11"></script>
+<script src="app.js?v=11"></script>
 </body>
 </html>

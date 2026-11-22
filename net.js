@@ -327,6 +327,7 @@ function tickTimers(){
  const left=Math.max(0,timerEnd-Date.now());
  document.querySelectorAll(".tmr-val").forEach(el=>{el.textContent=fmt(left)});
  document.querySelectorAll(".tmr-bar").forEach(el=>{el.style.width=(100*left/((el.dataset.total||1)*1000))+"%"});
+ document.querySelectorAll(".timer").forEach(el=>el.classList.toggle("low",left<=10000));
  if(left===0&&timerBeeped!==timerKey){timerBeeped=timerKey;beep(3);vibe([200,100,200])}
  else if(left>0&&left<=10000&&timerBeeped!==timerKey&&timerBeeped!==timerKey+"10"){timerBeeped=timerKey+"10";beep(1)}
 }

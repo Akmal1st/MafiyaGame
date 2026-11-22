@@ -7,6 +7,8 @@ let lastScreen="";
 function render(){
  const inGame=V.screen==="host"||V.screen==="player";
  const off=!net.online&&inGame&&V.state?`<div class="banner">${V.screen==="host"?t("banner_host"):esc(playerBanner())}</div>`:"";
+ const g=inGame&&V.state&&V.state.started?V.state.game:null;
+ document.body.dataset.phase=g?(g.winner?"over":g.stage):inGame?"lobby":"home"; // picks the night / day backdrop in style.css
  const screens={loading,home,join,player,host,kicked,stats};
  patch(app,topBar(inGame)+off+(screens[V.screen]||home)());
  if(lastScreen!==V.screen){lastScreen=V.screen;scrollTo(0,0)}
@@ -81,12 +83,14 @@ bind.loading=()=>{
 
 // ---------- home ----------
 let installPrompt=null;
+// A fedora silhouette for the home screen.
+const FEDORA=`<svg viewBox="0 0 160 100" fill="currentColor"><path d="M44 62c-2-16 4-38 14-44 6-4 12 2 22 2s16-6 22-2c10 6 16 28 14 44z"/><path d="M45 56h70l1 7H44z" fill="#8c0f17"/><ellipse cx="80" cy="68" rx="76" ry="14"/><path d="M58 20c8 6 36 6 44 0" stroke="#2a2326" stroke-width="2" fill="none"/></svg>`;
 window.addEventListener("beforeinstallprompt",e=>{e.preventDefault();installPrompt=e;if(V.screen==="home")render()});
 const standalone=()=>matchMedia("(display-mode: standalone)").matches||navigator.standalone;
 function home(){
  const ios=/iphone|ipad|ipod/i.test(navigator.userAgent);
  return `
- <h1>🎭 ${t("title")}</h1><p class="sub">${t("tagline")}</p>
+ <div class="hero"><div class="emblem" aria-hidden="true">${FEDORA}</div><h1>${t("title")}</h1><p class="sub">${t("tagline")}</p></div>
  <div class="card"><b>${t("i_host")}</b>${sub("i_host_sub")}
   <button class="big" id="create">${t("create")}</button></div>
  <div class="card"><b>${t("i_player")}</b>${sub("i_player_sub")}
@@ -189,7 +193,7 @@ function newsCard(st){
 }
 function winnerCard(st,extra=""){
  if(!st.game.winner)return "";
- return `<div class="card center" style="border-color:var(--ac)"><b style="font-size:22px">${winText(st.game.winner)}</b>${extra}</div>`;
+ return `<div class="card center winner"><b>${winText(st.game.winner)}</b>${extra}</div>`;
 }
 // Announcement from the host, on every phone until closed.
 function noticeCard(st){
@@ -240,8 +244,8 @@ function playerGame(st,sec,me){
   const nightActs=night?actionBlocks(sec,false):"";
   const noAct=night&&!meDead&&!over&&!nightActs?`<p class="sub mt">${t("no_action")}</p>`:"";
   roleHtml=V.showRole||over
-   ?`<div class="role">${r.e}</div><div class="rname" style="color:${r.c}">${roleName(sec.role)}</div><div class="rdesc">${roleDesc(sec.role)}</div>${extra}${nightActs}${noAct}${over?"":`<button class="sec big mt" id="tg">${t("hide_role")}</button>`}`
-   :`<div class="role">🂠</div><p class="sub">${t("nobody_looks")}${night&&!over?"<br>"+t("night_open"):""}</p><button class="big" id="tg">${t("show_role")}</button>`;
+   ?`<div class="rface" data-key="rface"><div class="role">${r.e}</div><div class="rname" style="color:${r.c}">${roleName(sec.role)}</div><div class="rdesc">${roleDesc(sec.role)}</div></div>${extra}${nightActs}${noAct}${over?"":`<button class="sec big mt" id="tg">${t("hide_role")}</button>`}`
+   :`<div class="rback" data-key="rback"><div class="cardback"></div><p class="sub">${t("nobody_looks")}${night&&!over?"<br>"+t("night_open"):""}</p></div><button class="big" id="tg">${t("show_role")}</button>`;
  }
  const vote=sec&&!night&&!over?actionBlocks(sec,true):"";
  return `
@@ -252,7 +256,7 @@ function playerGame(st,sec,me){
   ${newsCard(st)}
   ${meDead&&!over?`<div class="card center"><b>${t("you_out")}</b><p class="sub" style="margin:6px 0 0">${t("you_out_sub")}</p></div>`:""}
   ${vote?`<div class="card">${vote}</div>`:""}
-  <div class="card center" style="padding:20px 16px">${roleHtml}</div>
+  <div class="card center rolecard" style="padding:22px 16px;--rc:${sec&&(V.showRole||over)?R[sec.role].c:"var(--gold)"}">${roleHtml}</div>
   ${sec&&sec.chat?chatCard(sec.chat,true):""}
   <div class="card"><b>${t("alive_n",st.players.filter(p=>!p.dead).length,N)}</b>${playerList(st,{started:true})}</div>
   ${historyCard(st)}
